@@ -177,7 +177,7 @@ async function serveObject(context,node) {
     return s3Error('AccessDenied',403);
   }
   const type=node.mime || 'application/octet-stream';
-  const headers=new Headers({'Content-Type':type,'Accept-Ranges':'bytes',
+  const headers=new Headers({'Content-Type':type,'Accept-Ranges':'bytes','Cache-Control':'private, no-store',
     'Content-Disposition':'inline; filename*=UTF-8\'\''+encodeURIComponent(node.name)});
   if (record.metadata?.Channel !== 'CloudflareR2') {
     // Serve bytes with the existing ImgBed reader instead of a redirect;
@@ -212,7 +212,7 @@ async function serveObject(context,node) {
   }
   return new Response(object.body,{status:range?206:200,headers});
 }
-export async function onRequest(context) {
+async function handleRequest(context) {
   const {request,env}=context;
   try {
     if (!(await verifyS3(request,env))) return s3Error('SignatureDoesNotMatch',403);
@@ -374,4 +374,42 @@ export async function onRequest(context) {
     console.error('[s3]',e);
     return s3Error('InternalError',500);
   }
+}
+
+/**
+ * S3 browser SDK CORS. Do not allow arbitrary origins by default;
+ * signed API calls still pass verifyS3 inside handleRequest.
+ */
+export function allowedS3Origin(request,env) {
+  const origin=request.headers.get('Origin');
+  if(!origin || origin==='null')return '';
+  try{
+    const parsed=new URL(origin);
+    if(parsed.origin!==origin)return '';
+    if(origin===new URL(request.url).origin)return origin;
+    const allow=String(env.DISK_S3_CORS_ORIGINS||'').split(',').map(x=>x.trim());
+    return allow.includes(origin)?origin:'';
+  }catch(_){return '';}
+}
+export async function onRequest(context) {
+  const origin=allowedS3Origin(context.request,context.env);
+  if(context.request.method==='OPTIONS') {
+    if(!origin)return new Response(null,{status:403,headers:{'Cache-Control':'no-store'}});
+    const requested=context.request.headers.get('Access-Control-Request-Headers')||'';
+    const headers=/^[a-zA-Z0-9_, -]{0,2048}$/.test(requested)?requested:'';
+    return new Response(null,{status:204,headers:{
+      'Access-Control-Allow-Origin':origin,
+      'Access-Control-Allow-Methods':'GET,HEAD,PUT,POST,DELETE,OPTIONS',
+      'Access-Control-Allow-Headers':headers || 'Authorization,Content-Type,X-Amz-Date,X-Amz-Content-Sha256,X-Amz-Security-Token',
+      'Access-Control-Max-Age':'600',
+      'Vary':'Origin,Access-Control-Request-Headers'
+    }});
+  }
+  const result=await handleRequest(context);
+  if(!origin)return result;
+  const headers=new Headers(result.headers);
+  headers.set('Access-Control-Allow-Origin',origin);
+  headers.set('Access-Control-Expose-Headers','ETag,Content-Length,Content-Range,Accept-Ranges,x-amz-request-id');
+  headers.set('Vary','Origin');
+  return new Response(result.body,{status:result.status,statusText:result.statusText,headers});
 }
