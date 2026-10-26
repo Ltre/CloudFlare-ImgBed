@@ -228,7 +228,7 @@ $('#deleteSpace').onclick=async()=>{
  try{await api('space','POST',{space:state.space,operation:'delete'});state.space='';state.path='';await refreshSpaces();}catch(e){err(e);}
 };
 $('#auth').onclick=()=>{
- const key=prompt('输入协同密钥。留空则切回管理员会话。',state.key);
+ const key=prompt('输入协同密钥；跨协同分区操作可用英文逗号分隔多把密钥。留空则切回管理员会话。',state.key);
  if(key===null)return;
  state.key=key.trim();if(state.key)sessionStorage.setItem('imgbed-disk-token',state.key);
  else sessionStorage.removeItem('imgbed-disk-token');

@@ -55,6 +55,14 @@ export async function hashToken(value) {
   const digest = await crypto.subtle.digest('SHA-256', raw);
   return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('');
 }
+export function parseGrantTokens(request) {
+  const header=request.headers.get('X-Disk-Token');
+  const raw=header !== null ? header : (request.headers.get('Authorization')||'').replace(/^Bearer /i,'');
+  if (!raw) return [];
+  const tokens=raw.split(',').map(s=>s.trim());
+  if (tokens.length>8 || tokens.some(s=>!/^[0-9a-f]{64}$/i.test(s))) throw new DiskError('INVALID_DISK_TOKEN',401);
+  return tokens;
+}
 export async function adminAllowed(context) {
   const result = await authenticate({
     env: context.env, request: context.request,
@@ -69,12 +77,9 @@ export async function access(context, space, role = 'read') {
   }
   const explicitKey = context.request.headers.get('X-Disk-Token');
   if (explicitKey === null && await adminAllowed(context)) return { kind: 'admin', role: 'write' };
-  const header = explicitKey !== null ? explicitKey :
-    (context.request.headers.get('Authorization') || '').replace(/^Bearer /i, '');
-  if (header && /^[0-9a-f]{64}$/i.test(header)) {
-    const hash = await hashToken(header);
+  for (const token of parseGrantTokens(context.request)) {
     const grant = await one(db,
-      'SELECT id,role FROM disk_grants WHERE token_hash=? AND space_id=?', hash, space);
+      'SELECT id,role FROM disk_grants WHERE token_hash=? AND space_id=?', await hashToken(token), space);
     if (grant && (role === 'read' || grant.role === 'write')) return { kind: 'grant', role: grant.role };
   }
   throw new DiskError('DISK_FORBIDDEN', 403);

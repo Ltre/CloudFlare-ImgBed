@@ -2,7 +2,7 @@ import {
   DiskError, requireDiskDb, one, all, run, respond, handleDiskError,
   adminAllowed, assertAdmin, access, space, list, createSpace, mkdir, linkFile,
   resolve, renameNode, deleteTree, transfer, publicNode, createGrant, createShare,
-  sharedNode, resolveShare, hashToken, namePart, issueToken, uuid
+  sharedNode, resolveShare, hashToken, namePart, issueToken, uuid, parseGrantTokens
 } from '../../utils/disk/core.js';
 
 /**
@@ -29,11 +29,18 @@ export async function onRequest(context) {
       if (method === 'GET') {
         const admin = !request.headers.has('X-Disk-Token') && await adminAllowed(context);
         if (admin) return respond({success:true,spaces:await all(db,'SELECT * FROM disk_spaces ORDER BY created_at')});
-        const token = request.headers.get('X-Disk-Token') || (request.headers.get('Authorization') || '').replace(/^Bearer /i, '');
-        if (!/^[0-9a-f]{64}$/i.test(token || '')) throw new DiskError('DISK_FORBIDDEN',403);
-        const found = await all(db,'SELECT s.*,g.role FROM disk_spaces s JOIN disk_grants g ON g.space_id=s.id WHERE g.token_hash=?',await hashToken(token));
-        if (!found.length) throw new DiskError('DISK_FORBIDDEN',403);
-        return respond({success:true,spaces:found});
+        const tokens=parseGrantTokens(request);
+        if (!tokens.length) throw new DiskError('DISK_FORBIDDEN',403);
+        const bySpace=new Map();
+        for (const token of tokens) {
+          const found = await all(db,'SELECT s.*,g.role FROM disk_spaces s JOIN disk_grants g ON g.space_id=s.id WHERE g.token_hash=?',await hashToken(token));
+          for(const s of found) {
+            const previous=bySpace.get(s.id);
+            if(!previous || (s.role==='write' && previous.role==='read')) bySpace.set(s.id,s);
+          }
+        }
+        if (!bySpace.size) throw new DiskError('DISK_FORBIDDEN',403);
+        return respond({success:true,spaces:[...bySpace.values()]});
       }
       if (method === 'POST') {
         await assertAdmin(context);
