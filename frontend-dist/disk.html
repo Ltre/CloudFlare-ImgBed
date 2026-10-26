@@ -160,7 +160,7 @@ async function preview(n,path) {
     // Administrators use existing authenticated file route. Collaboration
     // readers may use a short-lived, random capability URL if necessary.
     const data=await api('source','GET',null,{space:state.space,path});
-    const fileUrl=data.previewUrl;
+    const fileUrl=state.key?(await api('preview','POST',{space:state.space,path})).url:data.previewUrl;
     const mime=n.mime||'';
     const holder=$('#media');holder.replaceChildren();
     let media;

@@ -2,7 +2,7 @@ import {
   DiskError, requireDiskDb, one, all, run, respond, handleDiskError,
   adminAllowed, assertAdmin, access, space, list, createSpace, mkdir, linkFile,
   resolve, renameNode, deleteTree, transfer, publicNode, createGrant, createShare,
-  sharedNode, resolveShare, hashToken, namePart
+  sharedNode, resolveShare, hashToken, namePart, issueToken, uuid
 } from '../../utils/disk/core.js';
 
 /**
@@ -141,6 +141,15 @@ export async function onRequest(context) {
         : [];
       return respond({success:true,root:{name:root.name,kind:root.kind},
         node:{name:node.name,kind:node.kind,size:node.size,mime:node.mime},entries});
+    }
+    if (action === 'preview' && method === 'POST') {
+      await access(context,body.space,'read');
+      const node=await resolve(db,body.space,body.path,false);
+      if (node.kind !== 'file') throw new DiskError('NOT_FILE');
+      const token=issueToken(), id=uuid(), expiresAt=Date.now()+300000;
+      await run(db,'INSERT INTO disk_shares(id,space_id,node_id,label,token_hash,expires_at,created_at) VALUES(?,?,?,?,?,?,?)',
+        id,body.space,node.id,'临时预览',await hashToken(token),expiresAt,Date.now());
+      return respond({success:true,url:'/api/disk-share/'+token,expiresAt});
     }
     if (action === 'source' && method === 'GET') {
       const s = url.searchParams.get('space'), path = url.searchParams.get('path');

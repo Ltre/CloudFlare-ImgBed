@@ -88,7 +88,7 @@ export async function verifyS3(request,env) {
     canonicalHeaders.push(name+':'+value.trim().replace(/\s+/g,' '));
   }
   const query=Array.from(params.entries()).filter(([k])=>!presigned || k!=='X-Amz-Signature')
-    .map(([k,v])=>[esc(k),esc(v)]).sort((a,b)=>a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]))
+    .map(([k,v])=>[esc(k),esc(v)]).sort((a,b)=>a[0]<b[0]?-1:a[0]>b[0]?1:a[1]<b[1]?-1:a[1]>b[1]?1:0)
     .map(([k,v])=>k+'='+v).join('&');
   const payload=presigned ? 'UNSIGNED-PAYLOAD' :
     (request.headers.get('x-amz-content-sha256') || emptyHash);
