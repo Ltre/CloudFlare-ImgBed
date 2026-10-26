@@ -67,8 +67,24 @@ export async function completeMultipart(db,r2,record,parts) {
   // R2 enforces its own multipart size constraints, including minimum part size.
   const size=parts.reduce((sum,p)=>sum+Number(byNumber.get(p.partNumber).size),0);
   if(!Number.isSafeInteger(size)) throw new DiskError('EntityTooLarge',413);
-  const result=await resumeMultipart(r2,record).complete(parts);
-  return { size,etag:String(result?.etag||'') };
+  try {
+    const result=await resumeMultipart(r2,record).complete(parts);
+    return { size,etag:String(result?.etag||'') };
+  } catch(error) {
+    // Cloudflare may have finalized the upload but the response was lost.
+    // A retry can safely recover if the newly assigned source ID now exists.
+    let existing=null;
+    try {
+      existing=typeof r2.head==='function' ? await r2.head(record.source_id) :
+        typeof r2.get==='function' ? await r2.get(record.source_id) : null;
+      if(existing?.body && typeof existing.body.cancel==='function') {
+        await existing.body.cancel();
+      }
+    }catch(_) {}
+    if(existing && Number(existing.size)===size)
+      return { size,etag:String(existing.etag||'') };
+    throw error;
+  }
 }
 export async function clearMultipart(db,record) {
   await run(db,'DELETE FROM disk_s3_upload_parts WHERE upload_id=?',record.id);

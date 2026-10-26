@@ -282,6 +282,13 @@ async function handleRequest(context) {
         return new Response(null,{status:200,headers:{ETag:'"'+etag+'"'}});
       }
       if(method==='POST') {
+        // Crash recovery: metadata insert may have succeeded just before a
+        // failed manifest cleanup. Retrying must finish cleanup, not reject it.
+        if(node && node.kind==='file' && node.source_id===record.source_id) {
+          await clearMultipart(db,record);
+          return xmlResponse('<CompleteMultipartUploadResult><Bucket>'+xml(bucket)+
+            '</Bucket><Key>'+xml(key)+'</Key></CompleteMultipartUploadResult>');
+        }
         if (node) return s3Error('ObjectAlreadyExists',409);
         const xmlBody=await request.text();
         const declaredHash=request.headers.get('x-amz-content-sha256');
