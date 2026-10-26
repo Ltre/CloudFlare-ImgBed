@@ -90,6 +90,8 @@ Use Node.js 22 and install dependencies first.
     npm test
     npm run test:server
     npx --no-install wrangler pages functions build functions --outdir data/ci-pages-build
+    node deploy/worker/generate-routes.js
+    npx --no-install wrangler deploy --config deploy/worker/wrangler.toml --dry-run --outdir data/ci-worker-build
 
 The repository's regression workflow now runs for pushes to d2tunnel-disk as well as dev and main.
 
@@ -100,3 +102,9 @@ The S3 gateway now implements CreateMultipartUpload, UploadPart, ListParts, Comp
 The disk page's direct upload button reuses ImgBed's existing /upload endpoint, then associates its returned ID with the chosen directory. For the original ImgBed uploader, optionally add diskSpace=PARTITION_UUID, diskPath=folder/subfolder and diskName=filename to the upload/final merge URL. The endUpload hook checks disk write authorization independently and adds the reference asynchronously. This does not grant virtual disk writes to public upload users. Large files should continue using the original ImgBed chunked upload flow.
 
 Original ImgBed file deletion is prevented while a virtual disk still references the file (DISK_SOURCE_IN_USE); original management move and rename operations update virtual references. Database/remote provider failures may require operator reconciliation; do not bypass the original API's permission controls.
+
+## Browser S3 CORS and deployment verification
+
+Cross-origin browser SDK clients must configure the optional `DISK_S3_CORS_ORIGINS` setting as a comma-separated allowlist of exact origins, such as `https://app.example.org`. The S3 gateway allows its own origin by default and handles OPTIONS preflight without requiring a signature; actual S3 API requests still require SigV4 authentication. S3 API responses are private/no-store.
+
+The branch's regression workflow now attempts a Pages Functions build and a **Workers dry-run build** to catch bundle/routing regressions before production deployment. Dry run is not an online deployment. Operators must still verify D1 migrations and configured secrets/bindings in both real Cloudflare environments.

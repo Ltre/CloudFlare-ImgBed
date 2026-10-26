@@ -44,3 +44,7 @@ jobs:
 
       - name: Build Pages Functions
         run: npx --no-install wrangler pages functions build functions --outdir data/ci-pages-build
+      - name: Build Workers bundle without deploying
+        run: |
+          node deploy/worker/generate-routes.js
+          npx --no-install wrangler deploy --config deploy/worker/wrangler.toml --dry-run --outdir data/ci-worker-build
