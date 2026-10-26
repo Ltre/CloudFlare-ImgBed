@@ -1,4 +1,5 @@
 import { DiskError, requireDiskDb, resolve, handleDiskError } from '../utils/disk/core.js';
+import { readSource } from '../utils/disk/read.js';
 
 /** Public static file links are opt-in per virtual file, never per partition. */
 export async function onRequest(context) {
@@ -9,7 +10,6 @@ export async function onRequest(context) {
     if (!spaceId || !rest.length) throw new DiskError('NOT_FOUND',404);
     const node = await resolve(requireDiskDb(context.env),spaceId,rest.map(decodeURIComponent).join('/'),false);
     if (node.kind !== 'file' || !node.is_public) throw new DiskError('NOT_FOUND',404);
-    const id = node.source_id.split('/').map(encodeURIComponent).join('/');
-    return Response.redirect(new URL('/file/' + id,context.request.url),302);
+    return readSource(context,node.source_id,true);
   } catch (e) { return handleDiskError(e); }
 }

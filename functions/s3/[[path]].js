@@ -10,6 +10,7 @@ import {
 } from '../utils/disk/core.js';
 import { getDatabase } from '../utils/databaseAdapter.js';
 import { addFileToIndex } from '../utils/indexManager.js';
+import { readSource } from '../utils/disk/read.js';
 
 const encoder = new TextEncoder();
 const emptyHash = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
@@ -178,10 +179,9 @@ async function serveObject(context,node) {
   const headers=new Headers({'Content-Type':type,'Accept-Ranges':'bytes',
     'Content-Disposition':'inline; filename*=UTF-8\'\''+encodeURIComponent(node.name)});
   if (record.metadata?.Channel !== 'CloudflareR2') {
-    // Non-R2 providers retain the original ImgBed streaming/chunk handling.
-    // This path uses an HTTP redirect and requires following redirects.
-    const target=new URL('/file/'+node.source_id.split('/').map(encodeURIComponent).join('/'),request.url);
-    return Response.redirect(target.toString(),307);
+    // Serve bytes with the existing ImgBed reader instead of a redirect;
+    // S3 SDKs should receive 200/206/HEAD responses directly.
+    return readSource(context,node.source_id,true);
   }
   const bucket=env.img_r2;
   if (!bucket) return s3Error('ServiceUnavailable',503);

@@ -2,7 +2,7 @@ import {
   DiskError, requireDiskDb, one, all, run, respond, handleDiskError,
   adminAllowed, assertAdmin, access, space, list, createSpace, mkdir, linkFile,
   resolve, renameNode, deleteTree, transfer, publicNode, createGrant, createShare,
-  sharedNode, resolveShare, hashToken
+  sharedNode, resolveShare, hashToken, namePart
 } from '../../utils/disk/core.js';
 
 /**
@@ -46,7 +46,6 @@ export async function onRequest(context) {
       await space(db,body.space);
       if (body.operation === 'rename') {
         const name = String(body.name || '').trim();
-        const {namePart} = await import('../../utils/disk/core.js');
         namePart(name);
         await run(db,'UPDATE disk_spaces SET name=? WHERE id=?',name,body.space);
         return respond({success:true});
