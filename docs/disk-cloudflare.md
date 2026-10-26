@@ -10,9 +10,10 @@ The original ImgBed uploader is unchanged. Upload an object through ImgBed, then
 ## Cloudflare Pages deployment
 
 1. Bind a Cloudflare D1 database under the **binding name img_d1** (Pages project → Settings → Bindings → D1). This is required by the virtual disk metadata model. Existing ImgBed KV metadata can remain in the existing img_url KV binding; there is no migration of old ImgBed file records.
-2. Apply the schema to this binding (once):
+2. Apply both migrations to this binding (once, in order):
 
     npx wrangler d1 execute YOUR_D1_DATABASE_NAME --remote --file=database/migrations/v2.8.0_disk.sql
+    npx wrangler d1 execute YOUR_D1_DATABASE_NAME --remote --file=database/migrations/v2.8.1_disk_s3_multipart.sql
 
     For a new ImgBed D1 setup, also initialize the original schema from database/init.sql. Do not drop or reset an existing database.
 3. Optionally bind R2 storage as **img_r2** (needed to use S3 PutObject; R2-backed ImgBed files also use the original img_r2 binding).
@@ -68,7 +69,7 @@ Authorization: AWS Signature V4 via Authorization header or X-Amz presigned URL,
 
 Implemented: ListBuckets, HeadBucket, ListObjects, ListObjectsV2, GetObject, HeadObject, PutObject (requires R2), DeleteObject (virtual unlink), CopyObject (virtual metadata copy), GET byte ranges, ETag for new R2 objects. PUT of large signed-hash payloads requires unsigned-payload streaming mode or the original ImgBed uploader.
 
-**Not implemented (S3 subset, not full S3 parity):** CreateBucket, DeleteBucket, S3 multipart-upload protocol, bucket ACL/IAM, versioning, object tagging, universal overwrite behavior, complete AWS conditional request matrix, native external-provider PUT. S3 credentials currently grant access to all disk partitions; they are not individual collaborator permissions.
+**Not implemented (S3 subset, not full S3 parity):** CreateBucket, DeleteBucket, bucket ACL/IAM, versioning, object tagging, universal overwrite behavior, complete AWS conditional request matrix, native external-provider PUT. S3 credentials currently grant access to all disk partitions; they are not individual collaborator permissions.
 
 ## Safety and limitations
 
@@ -91,3 +92,11 @@ Use Node.js 22 and install dependencies first.
     npx --no-install wrangler pages functions build functions --outdir data/ci-pages-build
 
 The repository's regression workflow now runs for pushes to d2tunnel-disk as well as dev and main.
+
+## S3 multipart and existing uploader integration
+
+The S3 gateway now implements CreateMultipartUpload, UploadPart, ListParts, CompleteMultipartUpload, AbortMultipartUpload and ListMultipartUploads through Cloudflare R2 and D1. Apply both disk migrations, including v2.8.1. Incomplete uploads should be aborted; outstanding R2 upload manifests currently require explicit cleanup.
+
+The disk page's direct upload button reuses ImgBed's existing /upload endpoint, then associates its returned ID with the chosen directory. For the original ImgBed uploader, optionally add diskSpace=PARTITION_UUID, diskPath=folder/subfolder and diskName=filename to the upload/final merge URL. The endUpload hook checks disk write authorization independently and adds the reference asynchronously. This does not grant virtual disk writes to public upload users. Large files should continue using the original ImgBed chunked upload flow.
+
+Original ImgBed file deletion is prevented while a virtual disk still references the file (DISK_SOURCE_IN_USE); original management move and rename operations update virtual references. Database/remote provider failures may require operator reconciliation; do not bypass the original API's permission controls.
