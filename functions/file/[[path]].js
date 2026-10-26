@@ -6,7 +6,7 @@ import { DiscordAPI } from "../utils/storage/discordAPI";
 import { HuggingFaceAPI } from "../utils/storage/huggingfaceAPI";
 import { buildWebDAVUrl, WebDAVAPI } from "../utils/storage/webdavAPI";
 import {
-    setCommonHeaders, setRangeHeaders, handleHeadRequest, getFileContent, isTgChannel,
+    setCommonHeaders, setRangeHeaders, handleHeadRequest, getFileContent, isTgChannel, parseSingleByteRange,
     returnWithCheck, return404, returnBlockImg, isDomainAllowed, FILE_CACHE_CONTROL
 } from './fileTools';
 import { getDatabase } from '../utils/databaseAdapter.js';
@@ -326,18 +326,21 @@ async function handleTelegramChunkedFile(context, imgRecord, encodedFileName, fi
     let rangeEnd = totalSize - 1;
     let isRangeRequest = false;
 
-    if (range) {
-        const matches = range.match(/bytes=(\d+)-(\d*)/);
-        if (matches) {
-            rangeStart = parseInt(matches[1]);
-            rangeEnd = matches[2] ? parseInt(matches[2]) : totalSize - 1;
-            isRangeRequest = true;
-
-            // 验证范围有效性
-            if (rangeStart >= totalSize || rangeEnd >= totalSize || rangeStart > rangeEnd) {
-                return new Response('Range Not Satisfiable', { status: 416 });
-            }
+    if (range && (!request.headers.get('If-Range') || request.headers.get('If-Range') === etag)) {
+        const parsed = parseSingleByteRange(range, totalSize);
+        if (!parsed) {
+            return new Response('Range Not Satisfiable', {
+                status: 416,
+                headers: {
+                    'Content-Range': 'bytes */' + totalSize,
+                    'Accept-Ranges': 'bytes',
+                    'Cache-Control': getChunkedFileCacheControl(context)
+                }
+            });
         }
+        rangeStart = parsed.start;
+        rangeEnd = parsed.end;
+        isRangeRequest = true;
     }
 
     // 处理HEAD请求
@@ -520,18 +523,21 @@ async function handleDiscordChunkedFile(context, imgRecord, encodedFileName, fil
     let rangeEnd = totalSize - 1;
     let isRangeRequest = false;
 
-    if (range) {
-        const matches = range.match(/bytes=(\d+)-(\d*)/);
-        if (matches) {
-            rangeStart = parseInt(matches[1]);
-            rangeEnd = matches[2] ? parseInt(matches[2]) : totalSize - 1;
-            isRangeRequest = true;
-
-            // 验证范围有效性
-            if (rangeStart >= totalSize || rangeEnd >= totalSize || rangeStart > rangeEnd) {
-                return new Response('Range Not Satisfiable', { status: 416 });
-            }
+    if (range && (!request.headers.get('If-Range') || request.headers.get('If-Range') === etag)) {
+        const parsed = parseSingleByteRange(range, totalSize);
+        if (!parsed) {
+            return new Response('Range Not Satisfiable', {
+                status: 416,
+                headers: {
+                    'Content-Range': 'bytes */' + totalSize,
+                    'Accept-Ranges': 'bytes',
+                    'Cache-Control': getChunkedFileCacheControl(context)
+                }
+            });
         }
+        rangeStart = parsed.start;
+        rangeEnd = parsed.end;
+        isRangeRequest = true;
     }
 
     // 处理HEAD请求

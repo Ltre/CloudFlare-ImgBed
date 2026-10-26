@@ -41,6 +41,7 @@ The current Mocha entry point automatically loads `.js` test files directly insi
 | Image processing | [imageProcessing.test.js](imageProcessing.test.js) | `functions/file/imageTransform.js` | Parameter validation, processor format support, historical generic types, original-image fallback, input formats and output headers |
 | AI tags | [ai.test.js](ai.test.js) | `api/manage/ai/tags.js` | Original formats, preview-type normalization, signatures and size limits; AI invocation only for valid input |
 | Shared file-type rules | [fileTypes.test.js](fileTypes.test.js) | `utils/mimeTypes.js` | MIME normalization, case-sensitive parameters, explicit-type precedence, extension inference, unknown/ambiguous extensions and random-image keywords versus strict classification |
+| File byte ranges | [disk-range.test.js](disk-range.test.js) | `functions/file/fileTools.js` and chunk reader | Suffix/open-ended/oversized ranges and invalid bounds |
 | Virtual disk | [disk.test.js](disk.test.js) | `functions/utils/disk/`, `functions/api/disk/`, `functions/s3/` | D1 tree, empty folders, cross-space copy/move, share boundaries, token hashing and public toggles |
 | Server imports | [smoke/serverImports.mjs](smoke/serverImports.mjs) | Main routes above and `functions/dav/` | Unmodified route imports and handler exports through the production loader |
 
