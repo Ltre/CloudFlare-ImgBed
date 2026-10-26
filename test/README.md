@@ -41,6 +41,7 @@ The current Mocha entry point automatically loads `.js` test files directly insi
 | Image processing | [imageProcessing.test.js](imageProcessing.test.js) | `functions/file/imageTransform.js` | Parameter validation, processor format support, historical generic types, original-image fallback, input formats and output headers |
 | AI tags | [ai.test.js](ai.test.js) | `api/manage/ai/tags.js` | Original formats, preview-type normalization, signatures and size limits; AI invocation only for valid input |
 | Shared file-type rules | [fileTypes.test.js](fileTypes.test.js) | `utils/mimeTypes.js` | MIME normalization, case-sensitive parameters, explicit-type precedence, extension inference, unknown/ambiguous extensions and random-image keywords versus strict classification |
+| S3 private reads | [disk-private-s3.test.js](disk-private-s3.test.js) | `functions/utils/disk/read.js` | Private R2 content, byte ranges and HEAD without exposing public ImgBed source |
 | S3 SigV4 | [s3-auth.test.js](s3-auth.test.js) | `functions/s3/[[path]].js` | Independent HMAC-SHA256 request signer, tampering rejection and CORS origin filtering |
 | S3 multipart | [s3-multipart.test.js](s3-multipart.test.js) | `functions/utils/disk/s3Multipart.js` | XML parsing, D1 durable part manifests, completion and abort via simulated R2 |
 | File byte ranges | [disk-range.test.js](disk-range.test.js) | `functions/file/fileTools.js` and chunk reader | Suffix/open-ended/oversized ranges and invalid bounds |
