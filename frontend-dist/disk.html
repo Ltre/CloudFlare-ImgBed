@@ -35,7 +35,7 @@ label{color:var(--muted);display:block;font-size:12px;margin-bottom:6px}.wide{wi
 <section class="panel">
 <div class="toolbar">
 <label for="space">当前分区</label><select id="space"></select>
-<button id="addSpace">+ 新建分区</button><button id="renameSpace">重命名分区</button><button id="deleteSpace">删除分区</button><button id="grant">协同授权</button><button id="grants">协同列表</button><button id="shares">分享管理</button>
+<button id="addSpace">+ 新建分区</button><button id="renameSpace">重命名分区</button><button id="deleteSpace">删除分区</button><button id="gc">回收空间</button><button id="grant">协同授权</button><button id="grants">协同列表</button><button id="shares">分享管理</button>
 <span id="role" style="color:var(--muted)"></span>
 </div></section>
 <section class="panel">
@@ -83,7 +83,7 @@ async function refreshSpaces() {
   picker.value=state.space;
   state.role=state.key?(state.spaces.find(s=>s.id===state.space)?.role||'read'):'admin';
   $('#role').textContent=state.key?('协同访问 · '+(state.role==='write'?'可编辑':'只读')):'管理员视图';
-  for(const id of ['addSpace','renameSpace','deleteSpace','grant','grants'])$('#'+id).hidden=!!state.key;
+  for(const id of ['addSpace','renameSpace','deleteSpace','grant','grants','gc'])$('#'+id).hidden=!!state.key;
   for(const id of ['folder','attach','shareFolder','upload','uploadChannel'])$('#'+id).disabled=state.role==='read';
   if(state.space) await browse(); else {state.entries=[];$('#entries').replaceChildren();$('#breadcrumb').replaceChildren();}
 }
@@ -257,6 +257,16 @@ $('#deleteSpace').onclick=async()=>{
  const current=state.spaces.find(s=>s.id===state.space);if(!current)return;
  if(!confirm('删除分区【'+current.name+'】中的全部虚拟目录、协同授权和分享？原始 ImgBed 文件不会删除。'))return;
  try{await api('space','POST',{space:state.space,operation:'delete'});state.space='';state.path='';await refreshSpaces();}catch(e){err(e);}
+};
+$('#gc').onclick=async()=>{
+  try{
+    const dry=await api('gc','POST',{confirm:false,max:25});
+    if(!dry.checked){status('没有符合 24 小时保留期且不被引用的 S3 文件');return;}
+    if(!confirm('有 '+dry.checked+' 个无引用的 S3/R2 对象可回收。\n执行后将物理删除这些对象，确认？'))return;
+    const result=await api('gc','POST',{confirm:true,max:25});
+    status('已回收 '+result.removed.length+' 个，失败 '+result.failed.length+
+      ' 个；如有更多无引用对象，可再次执行。');
+  }catch(e){err(e);}
 };
 $('#auth').onclick=()=>{
  const key=prompt('输入协同密钥；跨协同分区操作可用英文逗号分隔多把密钥。留空则切回管理员会话。',state.key);

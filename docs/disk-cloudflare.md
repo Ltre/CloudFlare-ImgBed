@@ -10,10 +10,11 @@ The original ImgBed uploader is unchanged. Upload an object through ImgBed, then
 ## Cloudflare Pages deployment
 
 1. Bind a Cloudflare D1 database under the **binding name img_d1** (Pages project → Settings → Bindings → D1). This is required by the virtual disk metadata model. Existing ImgBed KV metadata can remain in the existing img_url KV binding; there is no migration of old ImgBed file records.
-2. Apply both migrations to this binding (once, in order):
+2. Apply all three migrations to this binding (once, in order):
 
     npx wrangler d1 execute YOUR_D1_DATABASE_NAME --remote --file=database/migrations/v2.8.0_disk.sql
     npx wrangler d1 execute YOUR_D1_DATABASE_NAME --remote --file=database/migrations/v2.8.1_disk_s3_multipart.sql
+    npx wrangler d1 execute YOUR_D1_DATABASE_NAME --remote --file=database/migrations/v2.8.2_disk_gc.sql
 
     For a new ImgBed D1 setup, also initialize the original schema from database/init.sql. Do not drop or reset an existing database.
 3. Optionally bind R2 storage as **img_r2** (needed to use S3 PutObject; R2-backed ImgBed files also use the original img_r2 binding).
@@ -35,7 +36,7 @@ Both deployment targets reuse standard Web APIs and D1/R2; there are **no Node.j
 - Rename/move/copy: operate on virtual nodes. Cross-partition moves copy the virtual tree then unlink its old references, preserving the original uploaded bytes.
 - Collaborate: administrator creates a scoped read/write token per partition and shares it through a trusted channel. Enter the token under 协同密钥 in the disk UI. A write grant can modify the destination; moving also requires a write grant to the source. Viewers can obtain short-lived preview links for browser media elements.
 - Share: create a token for one file or folder subtree, optionally with expiry. Revoke it through DELETE /api/disk/shares. Share pages cannot escape the selected subtree.
-- Static resources: enable an individual file's is_public flag; GET/HEAD /disk-static/:space/:path reads it through the existing ImgBed file reader. Non-public paths return 404.
+- Static resources: enable an individual file's is_public flag; GET/HEAD /disk-static/:space/:path reads it through the original ImgBed reader or the authorized private R2 reader for S3-owned objects. Non-public paths return 404.
 - Preview: image, video, audio, text, PDF via the original ImgBed file reader. Single byte-range requests are supported for original provider paths that offer Range, including the current R2 and chunk reader logic.
 
 ## Management API
@@ -69,14 +70,14 @@ Authorization: AWS Signature V4 via Authorization header or X-Amz presigned URL,
 
 Implemented: ListBuckets, HeadBucket, ListObjects, ListObjectsV2, GetObject, HeadObject, PutObject (requires R2), DeleteObject and DeleteObjects (virtual unlink), CopyObject (virtual metadata copy), GET byte ranges, ETag for new R2 objects. PUT of large signed-hash payloads requires unsigned-payload streaming mode or the original ImgBed uploader.
 
-**Not implemented (S3 subset, not full S3 parity):** CreateBucket, DeleteBucket, bucket ACL/IAM, versioning, object tagging, complete AWS conditional request matrix, native external-provider PUT. PutObject, CopyObject and multipart completion use copy-on-write replacement of the target virtual object. Previous physical source bytes are conservatively retained to avoid destroying copies in other partitions; automatic orphan storage reclamation is not yet implemented. S3 credentials currently grant access to all disk partitions; they are not individual collaborator permissions.
+**Not implemented (S3 subset, not full S3 parity):** CreateBucket, DeleteBucket, bucket ACL/IAM, versioning, object tagging, complete AWS conditional request matrix, native external-provider PUT. PutObject, CopyObject and multipart completion use copy-on-write replacement of the target virtual object. Previous physical source bytes are conservatively retained to avoid destroying copies in other partitions; automatic deletion on overwrite is intentionally disabled; administrators can explicitly garbage-collect safely unreferenced S3-owned objects after a 24-hour grace period. S3 credentials currently grant access to all disk partitions; they are not individual collaborator permissions.
 
 ## Safety and limitations
 
-- Administrator security **must be configured**: when admin authentication is unconfigured, the original ImgBed management-auth policy allows administrative access.
+- Administrator security **must be configured**: virtual disk administration fails closed when no ImgBed administrator credentials are configured. The original ImgBed management policy may remain open until credentials are set.
 - D1 disk schema must be migrated separately for each Cloudflare deployment environment. The virtual disk will report DISK_D1_REQUIRED if D1 is absent.
 - Virtual operations use D1, not distributed object moves. Cross-partition operations copy up to 2,000 virtual nodes and do not provide a single transaction spanning multi-node copy; failures attempt destination rollback without deleting source objects.
-- Deleting original ImgBed source records can break references; reference counts and physical garbage collection are not coordinated with ImgBed's original delete interface.
+- ImgBed source deletion is blocked for referenced originals; management rename/move updates disk source IDs. Underlying storage and metadata changes are not a single distributed transaction, so failed provider operations still require reconciliation.
 - Sharing a file cannot override existing ImgBed block lists or public whitelist restrictions.
 - S3 object upload is limited to R2. It does not replace the ImgBed upload flow.
 - New disk UI is a separate page because this branch contains compiled frontend-dist assets, not the editable frontend source tree.
@@ -97,7 +98,7 @@ The repository's regression workflow now runs for pushes to d2tunnel-disk as wel
 
 ## S3 multipart and existing uploader integration
 
-The S3 gateway now implements CreateMultipartUpload, UploadPart, ListParts, CompleteMultipartUpload, AbortMultipartUpload and ListMultipartUploads through Cloudflare R2 and D1. Apply both disk migrations, including v2.8.1. Incomplete uploads should be aborted; outstanding R2 upload manifests currently require explicit cleanup.
+The S3 gateway now implements CreateMultipartUpload, UploadPart, ListParts, CompleteMultipartUpload, AbortMultipartUpload and ListMultipartUploads through Cloudflare R2 and D1. Apply all three disk migrations, including v2.8.1 and v2.8.2. Incomplete uploads should be aborted; outstanding R2 upload manifests currently require explicit cleanup.
 
 The disk page's direct upload button reuses ImgBed's existing /upload endpoint, then associates its returned ID with the chosen directory. For the original ImgBed uploader, optionally add diskSpace=PARTITION_UUID, diskPath=folder/subfolder and diskName=filename to the upload/final merge URL. The endUpload hook checks disk write authorization independently and adds the reference asynchronously. This does not grant virtual disk writes to public upload users. Large files should continue using the original ImgBed chunked upload flow.
 
@@ -109,4 +110,10 @@ Cross-origin browser SDK clients must configure the optional `DISK_S3_CORS_ORIGI
 
 The branch's regression workflow now attempts a Pages Functions build and a **Workers dry-run build** to catch bundle/routing regressions before production deployment. Dry run is not an online deployment. Operators must still verify D1 migrations and configured secrets/bindings in both real Cloudflare environments.
 
-Bulk S3 DeleteObjects (up to 1,000 keys/request) is supported with XML input. Both single and bulk deletion unlink virtual objects, preserving their underlying provider bytes when other references may exist; unreferenced R2 data is retained for later garbage collection.
+Bulk S3 DeleteObjects (up to 1,000 keys/request) is supported with XML input. Both single and bulk deletion unlink virtual objects, preserving their underlying provider bytes when other references may exist; unreferenced R2 data can be recovered by explicit administrator garbage collection after 24 hours; unrelated ImgBed source objects are never garbage-collected.
+
+## Administrator-controlled S3 storage reclamation
+
+`POST /api/disk/gc` requires administrator authentication. Send `{"confirm":false,"max":25}` to preview candidates; then send `{"confirm":true,"max":25}` to reclaim eligible objects, with a hard limit of 50 per request. Only gateway-created `disk-s3/<uuid>` objects recorded after migration v2.8.2 are candidates, and only after they have been unreferenced for at least 24 hours. D1 rechecks references atomically before marking an object as deleting; triggers reject new references while R2 deletion is in progress. The administrator page includes a 回收空间 action. It does not reclaim any legacy ImgBed uploads or externally managed provider content.
+
+S3-owned R2 objects are marked private in ImgBed metadata: ordinary unauthenticated `/file/<source-id>` requests remain blocked. S3 SigV4 and explicit virtual-disk share/static/preview permissions use the authorized private R2 reader instead. This separation is important when using S3 for private files.
