@@ -11,6 +11,7 @@ import {
 import { getDatabase } from '../utils/databaseAdapter.js';
 import { addFileToIndex } from '../utils/indexManager.js';
 import { readSource } from '../utils/disk/read.js';
+import { initMultipart,getMultipart,partUpload,listParts,parseCompletionXml,completeMultipart,clearMultipart,abortMultipart,listUploads } from '../utils/disk/s3Multipart.js';
 
 const encoder = new TextEncoder();
 const emptyHash = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
@@ -228,12 +229,85 @@ export async function onRequest(context) {
     if (!(await one(db,'SELECT id FROM disk_spaces WHERE id=?',bucket))) return s3Error('NoSuchBucket',404);
     if (!parts.length) {
       if (method==='HEAD') return new Response(null,{status:200});
+      if (method==='GET' && url.searchParams.has('uploads')) {
+        const uploads=await listUploads(db,bucket);
+        return xmlResponse('<ListMultipartUploadsResult><Bucket>'+xml(bucket)+'</Bucket>'+
+          uploads.map(u=>'<Upload><Key>'+xml(u.object_key)+'</Key><UploadId>'+xml(u.id)+'</UploadId><Initiated>'+
+            new Date(u.created_at).toISOString()+'</Initiated></Upload>').join('')+'</ListMultipartUploadsResult>');
+      }
       if (method==='GET') return await listBucket(db,bucket,url);
       return s3Error('NotImplemented',501);
     }
     const key=parts.join('/'),dir=parts.slice(0,-1).join('/'),name=parts.at(-1);
     let node=null;
     try {node=await resolve(db,bucket,key,false);}catch(e){if(e.code!=='NODE_NOT_FOUND')throw e;}
+
+    // AWS S3 Multipart Upload: POST ?uploads, PUT ?partNumber&uploadId,
+    // GET/POST/DELETE ?uploadId. All operations are subject to SigV4 above.
+    if(method==='POST' && url.searchParams.has('uploads')) {
+      if (node) return s3Error('ObjectAlreadyExists',409);
+      await ensureParents(db,bucket,parts.slice(0,-1));
+      const mime=request.headers.get('Content-Type')||'application/octet-stream';
+      const upload=await initMultipart(db,env.img_r2,bucket,key,mime);
+      return xmlResponse('<InitiateMultipartUploadResult><Bucket>'+xml(bucket)+'</Bucket><Key>'+
+        xml(key)+'</Key><UploadId>'+xml(upload.id)+'</UploadId></InitiateMultipartUploadResult>');
+    }
+    if(url.searchParams.has('uploadId')) {
+      const record=await getMultipart(db,bucket,key,url.searchParams.get('uploadId'));
+      if(method==='GET') {
+        const partsList=await listParts(db,record);
+        return xmlResponse('<ListPartsResult><Bucket>'+xml(bucket)+'</Bucket><Key>'+xml(key)+
+          '</Key><UploadId>'+xml(record.id)+'</UploadId>'+
+          partsList.map(p=>'<Part><PartNumber>'+p.part_number+'</PartNumber><ETag>"'+xml(p.etag)+
+          '"</ETag><Size>'+p.size+'</Size></Part>').join('')+'</ListPartsResult>');
+      }
+      if(method==='DELETE') {
+        await abortMultipart(db,env.img_r2,record);
+        return new Response(null,{status:204});
+      }
+      if(method==='PUT' && url.searchParams.has('partNumber')) {
+        const partNumber=Number(url.searchParams.get('partNumber'));
+        const size=Number(request.headers.get('Content-Length'));
+        if (!request.headers.has('Content-Length') || !Number.isSafeInteger(size) || size<1)
+          return s3Error('MissingContentLength',411);
+        let partBody=request.body;
+        const declaredHash=request.headers.get('x-amz-content-sha256');
+        if (declaredHash && /^[a-f0-9]{64}$/i.test(declaredHash)) {
+          if(size>16*1024*1024) return s3Error('EntityTooLarge',413,'Use UNSIGNED-PAYLOAD for streamed multipart parts');
+          partBody=await request.arrayBuffer();
+          if(!constantEqual(signatureHex(await crypto.subtle.digest('SHA-256',partBody)),declaredHash.toLowerCase()))
+            return s3Error('XAmzContentSHA256Mismatch',400);
+        }else if(declaredHash && declaredHash!=='UNSIGNED-PAYLOAD') return s3Error('NotImplemented',501);
+        const etag=await partUpload(db,env.img_r2,record,partNumber,partBody,size);
+        return new Response(null,{status:200,headers:{ETag:'"'+etag+'"'}});
+      }
+      if(method==='POST') {
+        if (node) return s3Error('ObjectAlreadyExists',409);
+        const xmlBody=await request.text();
+        const declaredHash=request.headers.get('x-amz-content-sha256');
+        if (declaredHash && /^[a-f0-9]{64}$/i.test(declaredHash) &&
+            !constantEqual(await sha256(xmlBody),declaredHash.toLowerCase()))
+          return s3Error('XAmzContentSHA256Mismatch',400);
+        const partsData=parseCompletionXml(xmlBody);
+        const completed=await completeMultipart(db,env.img_r2,record,partsData);
+        const name=parts.at(-1),dir=parts.slice(0,-1).join('/');
+        const parent=await resolve(db,bucket,dir);
+        const sourceId=record.source_id, mime=record.mime,now=Date.now();
+        const metadata={Channel:'CloudflareR2',FileName:name,FileType:mime,FileSize:String(completed.size),
+          TimeStamp:now,Directory:'disk-s3/',ListType:'None'};
+        // If metadata/index completion fails, the R2 object remains recoverable
+        // under sourceId. Never delete completed R2 bytes in this case.
+        await getDatabase(env).put(sourceId,'',{metadata});
+        await insertNode(db,{id:uuid(),space_id:bucket,parent_id:parent.id,name,kind:'file',
+          source_id:sourceId,mime,size:completed.size,is_public:0,created_at:now,updated_at:now});
+        await clearMultipart(db,record);
+        if(context.waitUntil) context.waitUntil(addFileToIndex(context,sourceId,metadata));
+        return xmlResponse('<CompleteMultipartUploadResult><Location>'+xml(request.url.split('?')[0])+
+          '</Location><Bucket>'+xml(bucket)+'</Bucket><Key>'+xml(key)+'</Key><ETag>"'+
+          xml(completed.etag)+'"</ETag></CompleteMultipartUploadResult>');
+      }
+      return s3Error('MethodNotAllowed',405);
+    }
     if (method==='GET'||method==='HEAD') {
       if (!node || node.kind!=='file') return s3Error('NoSuchKey',404);
       return serveObject(context,node);
