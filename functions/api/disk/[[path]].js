@@ -4,6 +4,7 @@ import {
   resolve, renameNode, deleteTree, transfer, publicNode, createGrant, createShare,
   sharedNode, resolveShare, hashToken, namePart, issueToken, uuid, parseGrantTokens
 } from '../../utils/disk/core.js';
+import { collectUnusedS3Objects } from '../../utils/disk/gc.js';
 
 /**
  * Cloudflare Pages + Workers API. Virtual metadata is isolated from ImgBed
@@ -24,6 +25,11 @@ export async function onRequest(context) {
     if (method === 'POST') {
       try { body = await request.json(); } catch (_) { throw new DiskError('INVALID_JSON'); }
       if (!body || typeof body !== 'object' || Array.isArray(body)) throw new DiskError('INVALID_JSON');
+    }
+    if (action === 'gc' && method === 'POST') {
+      await assertAdmin(context);
+      const result=await collectUnusedS3Objects(context,{confirm:body.confirm===true,max:body.max||25});
+      return respond({success:true,...result});
     }
     if (action === 'spaces') {
       if (method === 'GET') {

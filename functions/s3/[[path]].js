@@ -11,6 +11,7 @@ import {
 import { getDatabase } from '../utils/databaseAdapter.js';
 import { addFileToIndex } from '../utils/indexManager.js';
 import { readSource } from '../utils/disk/read.js';
+import { registerS3Object } from '../utils/disk/gc.js';
 import { initMultipart,getMultipart,partUpload,listParts,parseCompletionXml,completeMultipart,clearMultipart,abortMultipart,listUploads } from '../utils/disk/s3Multipart.js';
 
 const encoder = new TextEncoder();
@@ -369,6 +370,7 @@ async function handleRequest(context) {
           TimeStamp:now,Directory:'disk-s3/',ListType:'Block',DiskS3Private:true};
         // If metadata/index completion fails, the R2 object remains recoverable
         // under sourceId. Never delete completed R2 bytes in this case.
+        await registerS3Object(db,sourceId);
         await getDatabase(env).put(sourceId,'',{metadata});
         await upsertObjectNode(db,bucket,parent,name,node,sourceId,mime,completed.size);
         await clearMultipart(db,record);
@@ -426,6 +428,7 @@ async function handleRequest(context) {
       const metadata={Channel:'CloudflareR2',FileName:name,FileType:contentType,
         FileSize:(contentLength/1048576).toFixed(2),FileSizeBytes:contentLength,TimeStamp:Date.now(),Directory:'disk-s3/',ListType:'Block',DiskS3Private:true};
       try {
+        await registerS3Object(db,fileId);
         await getDatabase(env).put(fileId,'',{metadata});
         await upsertObjectNode(db,bucket,parent,name,node,fileId,contentType,contentLength);
       }catch(e) { await env.img_r2.delete(fileId);try { await getDatabase(env).delete(fileId); } catch (_) {} throw e; }
