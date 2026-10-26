@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>网盘 · CloudFlare-ImgBed</title>
+<style>
+:root{color-scheme:dark;--bg:#090d18;--panel:#141b2b;--line:#2a374e;--text:#e9edf9;--muted:#98a6bf;--brand:#7b9dff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.6 system-ui,-apple-system,BlinkMacSystemFont,sans-serif}
+main{width:min(1160px,calc(100% - 32px));margin:28px auto}header{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}
+h1{font-size:24px;margin:0 0 4px}p{margin:0;color:var(--muted)}
+.panel{border:1px solid var(--line);background:var(--panel);border-radius:18px;margin-top:16px;padding:16px}
+button,select,input{font:inherit;color:var(--text);background:#202b40;border:1px solid #3a4b65;border-radius:9px;padding:8px 11px}
+input{min-width:0}button{cursor:pointer}button:hover{border-color:var(--brand)}
+button.primary{background:var(--brand);color:#07152c;border-color:var(--brand);font-weight:650}
+button.warn{color:#ffb1ae}button:disabled{opacity:.45;cursor:default}
+.toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.toolbar>*{max-width:100%}
+.breadcrumb{display:flex;flex-wrap:wrap;gap:7px;align-items:center;margin-bottom:12px}
+.crumb{background:none;padding:3px 6px;border:0;color:#a9bcff}.crumb:last-child{color:var(--text)}
+table{width:100%;border-collapse:collapse;min-width:650px}th{text-align:left;color:var(--muted);font-size:12px;font-weight:500}
+td,th{padding:12px 8px;border-bottom:1px solid var(--line)}
+tr:last-child td{border-bottom:0}.filename{border:0;background:none;padding:0;text-align:left;color:var(--text);max-width:420px;overflow-wrap:anywhere}
+.filename:hover{text-decoration:underline}.rows{overflow:auto}
+.actions{display:flex;gap:6px;flex-wrap:wrap}.actions button{padding:5px 9px;font-size:12px}
+#status{min-height:22px;margin-top:12px;color:#bdd1ff;white-space:pre-wrap}#status.error{color:#ffabab}
+dialog{border:1px solid var(--line);border-radius:18px;background:#182235;color:var(--text);width:min(760px,95vw);max-height:87vh}
+dialog::backdrop{background:#030713d9}dialog::backdrop{backdrop-filter:blur(5px)}
+#viewer{width:min(960px,96vw)}#viewer img,#viewer video,#viewer audio,#viewer iframe{max-width:100%;width:100%;max-height:72vh;object-fit:contain}#viewer iframe{height:68vh;border:0;background:white}
+label{color:var(--muted);display:block;font-size:12px;margin-bottom:6px}.wide{width:100%}
+.mono{font-family:ui-monospace,monospace;overflow-wrap:anywhere;font-size:12px}
+@media(max-width:650px){main{width:calc(100% - 16px);margin:12px auto}.panel{padding:10px}h1{font-size:20px}}
+</style></head>
+<body><main>
+<header><div><h1>◈ 云端网盘</h1><p>多级目录 · 分区 · 协同 · S3 · 文件分享</p></div>
+<div class="toolbar"><a href="/" style="color:#a9bcff">返回 ImgBed</a><button id="auth">协同密钥</button><button id="refresh">刷新</button></div></header>
+<section class="panel">
+<div class="toolbar">
+<label for="space">当前分区</label><select id="space"></select>
+<button id="addSpace">+ 新建分区</button><button id="grant">协同授权</button>
+<span id="role" style="color:var(--muted)"></span>
+</div></section>
+<section class="panel">
+<div id="breadcrumb" class="breadcrumb"></div>
+<div class="toolbar">
+<button class="primary" id="folder">+ 新建文件夹</button>
+<button id="attach">关联已有文件</button>
+<button id="shareFolder">分享当前文件夹</button>
+<button id="back">上一级</button>
+</div></section>
+<section class="panel"><div class="rows"><table><thead><tr><th>名称</th><th>大小 / 类型</th><th>公开</th><th>操作</th></tr></thead><tbody id="entries"></tbody></table></div></section>
+<div id="status" role="status"></div>
+</main>
+<dialog id="viewer"><div class="toolbar" style="justify-content:space-between"><strong id="viewerTitle"></strong><button id="closeViewer">关闭</button></div><div id="media" style="margin-top:14px"></div></dialog>
+<script>
+(() => {
+'use strict';
+const $ = s => document.querySelector(s);
+const state = {spaces:[],space:'',path:'',entries:[],role:'admin',key:sessionStorage.getItem('imgbed-disk-token')||''};
+const qs = (x) => new URLSearchParams(x).toString();
+const status = (s,err=false) => { $('#status').textContent=s;$('#status').className=err?'error':''; };
+async function api(action,method='GET',data=null,query={}) {
+  const headers={};
+  if (state.key) headers['X-Disk-Token']=state.key;
+  if (data!==null) headers['Content-Type']='application/json';
+  const result=await fetch('/api/disk/'+action+(Object.keys(query).length?'?'+qs(query):''),{
+    method,headers,credentials:'same-origin',body:data!==null?JSON.stringify(data):undefined
+  });
+  let payload;
+  try {payload=await result.json();}catch(e){throw new Error('HTTP '+result.status);}
+  if (!result.ok || !payload.success) throw new Error(payload.error||'HTTP '+result.status);
+  return payload;
+}
+function el(tag,text,cls) {const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;}
+function button(label,fn,cls='') {const b=el('button',label,cls);b.addEventListener('click',fn);return b;}
+function makePath(name) {return state.path?[state.path,name].join('/'):name;}
+function size(bytes) {return bytes>=1073741824?(bytes/1073741824).toFixed(2)+' GiB':bytes>=1048576?(bytes/1048576).toFixed(2)+' MiB':bytes>=1024?(bytes/1024).toFixed(1)+' KiB':bytes+' B';}
+const err = e => status(e.message||String(e),true);
+async function refreshSpaces() {
+  const data=await api('spaces');
+  state.spaces=data.spaces;
+  const picker=$('#space');picker.replaceChildren();
+  for(const s of state.spaces){const opt=el('option',s.name+' · '+s.id.slice(0,8));opt.value=s.id;picker.append(opt);}
+  if(!state.spaces.some(s=>s.id===state.space))state.space=state.spaces[0]?.id||'';
+  picker.value=state.space;
+  $('#role').textContent=state.key?'协同访问':'管理员视图';
+  if(state.space) await browse(); else {state.entries=[];$('#entries').replaceChildren();$('#breadcrumb').replaceChildren();}
+}
+async function browse(path=state.path) {
+  state.path=path;
+  const data=await api('browse','GET',null,{space:state.space,path});
+  state.entries=data.entries;
+  const bc=$('#breadcrumb');bc.replaceChildren();
+  for(const crumb of data.breadcrumbs){bc.append(button(crumb.name,()=>browse(crumb.path),'crumb'));bc.append(el('span','›'));}
+  bc.lastChild?.remove();
+  const tbody=$('#entries');tbody.replaceChildren();
+  for(const n of state.entries) {
+    const row=el('tr'), name=el('td'), info=el('td'), pub=el('td'),actions=el('td','', 'actions');
+    const path=makePath(n.name);
+    const file=n.kind==='file';
+    name.append(button((file?'📄 ':'📁 ')+n.name,()=>file?preview(n,path):browse(path),'filename'));
+    info.textContent=file?size(n.size)+' · '+(n.mime||'文件'):'目录';
+    pub.textContent=file?(n.is_public?'已公开':'私有'):'—';
+    if(file)actions.append(button('预览',()=>preview(n,path)));
+    if(file)actions.append(button('静态',()=>togglePublic(n,path)));
+    actions.append(button('复制',()=>transfer(n,path,'copy')));
+    actions.append(button('移动',()=>transfer(n,path,'move')));
+    actions.append(button('重命名',()=>rename(n,path)));
+    actions.append(button('分享',()=>share(path)));
+    actions.append(button('删除',()=>removeNode(path),'warn'));
+    row.append(name,info,pub,actions);tbody.append(row);
+  }
+  if(!state.entries.length){const row=el('tr'),cell=el('td','这个目录还没有内容');cell.colSpan=4;row.append(cell);tbody.append(row);}
+  status('当前 '+data.entries.length+' 项 · '+data.path);
+}
+async function rename(n,path) {
+  const name=prompt('新名称',n.name);if(name===null)return;
+  try{await api('rename','POST',{space:state.space,path,name});await browse();}catch(e){err(e);}
+}
+async function transfer(n,path,operation) {
+  const choices=state.spaces.map((s,i)=>String(i+1)+'. '+s.name+' ('+s.id+')').join('\n');
+  const selected=prompt('目标分区：输入编号\n'+choices,String(state.spaces.findIndex(s=>s.id===state.space)+1));
+  if(selected===null)return;
+  const space=state.spaces[Number(selected)-1];if(!space){status('无效分区',true);return;}
+  const destinationPath=prompt('目标文件夹路径（留空表示根目录）','');if(destinationPath===null)return;
+  const name=prompt('复制/移动后的名称',n.name);if(name===null)return;
+  try {
+    const data=await api('transfer','POST',{sourceSpace:state.space,sourcePath:path,
+      destinationSpace:space.id,destinationPath,operation,name});
+    status((operation==='copy'?'复制':'移动')+'成功，共 '+data.count+' 项');await browse();
+  }catch(e){err(e);}
+}
+async function removeNode(path) {
+  if(!confirm('仅删除网盘目录中的引用，不删除 ImgBed 原始文件。确定？'))return;
+  try{await api('node','DELETE',null,{space:state.space,path});await browse();}catch(e){err(e);}
+}
+async function togglePublic(n,path) {
+  try {
+    const enabled=!n.is_public;
+    await api('public','POST',{space:state.space,path,enabled});
+    await browse();
+    if(enabled) {
+      const url=location.origin+'/disk-static/'+encodeURIComponent(state.space)+'/'+
+        path.split('/').map(encodeURIComponent).join('/');
+      await navigator.clipboard?.writeText(url);
+      status('静态资源链接已启用并尝试复制：'+url);
+    }
+  }catch(e){err(e);}
+}
+async function share(path) {
+  const hours=prompt('分享有效小时数（留空为永久）','24');
+  if(hours===null)return;
+  try {
+    const data=await api('shares','POST',{space:state.space,path,hours:hours.trim()?Number(hours):null});
+    const url=location.origin+data.share.url;
+    await navigator.clipboard?.writeText(url);
+    prompt('分享链接（创建成功，建议立即保存）',url);
+  }catch(e){err(e);}
+}
+async function preview(n,path) {
+  try {
+    // Administrators use existing authenticated file route. Collaboration
+    // readers may use a short-lived, random capability URL if necessary.
+    const data=await api('source','GET',null,{space:state.space,path});
+    const fileUrl=data.previewUrl;
+    const mime=n.mime||'';
+    const holder=$('#media');holder.replaceChildren();
+    let media;
+    if(mime.startsWith('image/')) media=el('img');
+    else if(mime.startsWith('video/')){media=el('video');media.controls=true;media.preload='metadata';}
+    else if(mime.startsWith('audio/')){media=el('audio');media.controls=true;media.preload='metadata';}
+    else if(mime==='application/pdf'||mime.startsWith('text/'))media=el('iframe');
+    else {const a=el('a','打开文件或下载');a.href=fileUrl;a.target='_blank';a.rel='noopener';media=a;}
+    if(media.tagName!=='A')media.src=fileUrl;
+    holder.append(media);$('#viewerTitle').textContent=n.name;$('#viewer').showModal();
+  }catch(e){err(e);}
+}
+$('#closeViewer').onclick=()=>{$('#viewer').close();$('#media').replaceChildren();};
+$('#space').onchange=e=>{state.space=e.target.value;state.path='';browse().catch(err);};
+$('#refresh').onclick=()=>refreshSpaces().catch(err);
+$('#back').onclick=()=>browse(state.path.split('/').slice(0,-1).join('/')).catch(err);
+$('#folder').onclick=async()=>{const name=prompt('文件夹名称');if(name===null)return;try{await api('mkdir','POST',{space:state.space,path:state.path,name});await browse();}catch(e){err(e);}};
+$('#attach').onclick=async()=>{const sourceId=prompt('已有 ImgBed 文件 ID（上传成功后返回的文件 ID，非 URL）');if(!sourceId)return;
+ const name=prompt('在网盘中的文件名称（可留空）','');if(name===null)return;
+ try{await api('import','POST',{space:state.space,path:state.path,sourceId,name});await browse();}catch(e){err(e);}};
+$('#shareFolder').onclick=()=>state.path?share(state.path):status('不能分享网盘根目录；请进入具体文件夹。',true);
+$('#addSpace').onclick=async()=>{const name=prompt('新分区名称');if(!name)return;try{const data=await api('spaces','POST',{name});state.space=data.space.id;state.path='';await refreshSpaces();}catch(e){err(e);}};
+$('#grant').onclick=async()=>{if(!state.space)return;
+ const role=prompt('协同权限（read 或 write）','read');if(!role)return;
+ const label=prompt('协同名称','协同用户');if(label===null)return;
+ try{const data=await api('grants','POST',{space:state.space,role,label});prompt('协同密钥只显示一次，请立即复制并妥善保管',data.grant.token);}catch(e){err(e);}
+};
+$('#auth').onclick=()=>{
+ const key=prompt('输入协同密钥。留空则切回管理员会话。',state.key);
+ if(key===null)return;
+ state.key=key.trim();if(state.key)sessionStorage.setItem('imgbed-disk-token',state.key);
+ else sessionStorage.removeItem('imgbed-disk-token');
+ state.space='';state.path='';refreshSpaces().catch(err);
+};
+refreshSpaces().catch(e=>{err(e);});
+})();
+</script></body></html>
