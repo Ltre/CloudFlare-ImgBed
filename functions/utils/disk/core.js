@@ -113,7 +113,8 @@ export async function list(db, spaceId, path) {
 export async function createSpace(db, name) {
   namePart(name);
   const result = { id: uuid(), name, created_at: Date.now() };
-  await run(db, 'INSERT INTO disk_spaces(id,name,created_at) VALUES(?,?,?)', result.id,result.name,result.created_at);
+  try { await run(db, 'INSERT INTO disk_spaces(id,name,created_at) VALUES(?,?,?)', result.id,result.name,result.created_at); }
+  catch (e) { if (/unique|constraint/i.test(String(e))) throw new DiskError('SPACE_NAME_CONFLICT',409); throw e; }
   return result;
 }
 export async function mkdir(db, spaceId, path, name) {
@@ -177,7 +178,8 @@ export async function deleteTree(db, root) {
   if (!root.id) throw new DiskError('ROOT_NOT_ALLOWED');
   // Recursive delete only touches virtual nodes, never ImgBed source objects.
   const deleted = await all(db, 'WITH RECURSIVE tree(id) AS (SELECT id FROM disk_nodes WHERE id=? UNION ALL SELECT n.id FROM disk_nodes n JOIN tree t ON n.parent_id=t.id) SELECT id FROM tree',root.id);
-  for (const n of deleted.reverse()) await run(db, 'DELETE FROM disk_nodes WHERE id=?', n.id);
+  // A single statement makes subtree removal atomic in Cloudflare D1.
+  await run(db, 'DELETE FROM disk_nodes WHERE id IN (WITH RECURSIVE tree(id) AS (SELECT id FROM disk_nodes WHERE id=? UNION ALL SELECT n.id FROM disk_nodes n JOIN tree t ON n.parent_id=t.id) SELECT id FROM tree)', root.id);
   return deleted.length;
 }
 export async function transfer(db, sourceSpace, sourcePath, destSpace, destPath, action, targetName) {

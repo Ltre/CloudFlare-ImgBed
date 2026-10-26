@@ -260,13 +260,25 @@ export async function onRequest(context) {
     if (method==='PUT') {
       if (!env.img_r2) return s3Error('ServiceUnavailable',503,'R2 binding is required for S3 PutObject');
       if (node) return s3Error('ObjectAlreadyExists',409);
-      if (!request.body) return s3Error('InvalidRequest');
       const fileId='disk-s3/'+uuid(),contentType=request.headers.get('Content-Type')||'application/octet-stream';
       const contentLength=Number(request.headers.get('Content-Length'));
       if (!Number.isSafeInteger(contentLength) || contentLength<0) return s3Error('MissingContentLength',411);
       await ensureParents(db,bucket,parts.slice(0,-1));
       const parent=await resolve(db,bucket,dir);
-      await env.img_r2.put(fileId,request.body,{httpMetadata:{contentType}});
+      let payload=request.body || new Uint8Array(0);
+      const declaredHash=request.headers.get('x-amz-content-sha256');
+      if (declaredHash && /^[a-f0-9]{64}$/i.test(declaredHash)) {
+        // WebCrypto digests are non-streaming. Verify only bounded signed PUTs;
+        // use TLS-backed UNSIGNED-PAYLOAD for large streamed uploads.
+        if (contentLength>16*1024*1024) return s3Error('EntityTooLarge',413,
+          'Large PUT requires UNSIGNED-PAYLOAD, or use the ImgBed uploader');
+        payload=await request.arrayBuffer();
+        const actual=signatureHex(await crypto.subtle.digest('SHA-256',payload));
+        if (!constantEqual(actual,declaredHash.toLowerCase())) return s3Error('XAmzContentSHA256Mismatch',400);
+      } else if (declaredHash && declaredHash!=='UNSIGNED-PAYLOAD') {
+        return s3Error('NotImplemented',501,'Unsupported streaming checksum mode');
+      }
+      await env.img_r2.put(fileId,payload,{httpMetadata:{contentType}});
       const metadata={Channel:'CloudflareR2',FileName:name,FileType:contentType,
         FileSize:String(contentLength),TimeStamp:Date.now(),Directory:'disk-s3/',ListType:'None'};
       try {
@@ -274,7 +286,7 @@ export async function onRequest(context) {
         await insertNode(db,{id:uuid(),space_id:bucket,parent_id:parent.id,name,
           kind:'file',source_id:fileId,mime:contentType,size:contentLength,is_public:0,
           created_at:Date.now(),updated_at:Date.now()});
-      }catch(e) { await env.img_r2.delete(fileId);throw e; }
+      }catch(e) { await env.img_r2.delete(fileId);try { await getDatabase(env).delete(fileId); } catch (_) {} throw e; }
       if (context.waitUntil) context.waitUntil(addFileToIndex(context,fileId,metadata));
       return new Response(null,{status:200,headers:{ETag:'"'+fileId.split('/')[1]+'"'}});
     }
