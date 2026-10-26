@@ -3,6 +3,7 @@ import { DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { purgeCFCache, purgeRandomFileListCache, purgePublicFileListCache } from "../../../utils/purgeCache";
 import { removeFileFromIndex, batchRemoveFilesFromIndex } from "../../../utils/indexManager.js";
 import { getDatabase } from '../../../utils/databaseAdapter.js';
+import { assertUnlinkedSource } from '../../../utils/disk/sourceLinks.js';
 import { DiscordAPI } from '../../../utils/storage/discordAPI.js';
 import { HuggingFaceAPI } from '../../../utils/storage/huggingfaceAPI.js';
 import { WebDAVAPI } from '../../../utils/storage/webdavAPI.js';
@@ -142,6 +143,8 @@ export async function deleteFile(env, fileId, cdnUrl, url) {
             console.warn(`File ${fileId} not found in database, skipping delete`);
             return true;
         }
+
+        await assertUnlinkedSource(env,fileId);
 
         // 如果是R2渠道的图片，需要删除R2中对应的图片
         if (img.metadata?.Channel === 'CloudflareR2') {
