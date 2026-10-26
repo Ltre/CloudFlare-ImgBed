@@ -173,7 +173,9 @@ async function serveObject(context,node) {
   const {env,request}=context;
   const record=await getDatabase(env).getWithMetadata(node.source_id);
   if (!record) return s3Error('NoSuchKey',404);
-  if (record.metadata?.ListType==='Block' || (record.metadata?.Label==='adult' && record.metadata?.ListType!=='White')) {
+  const privateS3=node.source_id.startsWith('disk-s3/') && record.metadata?.DiskS3Private===true;
+  if (!privateS3 && (record.metadata?.ListType==='Block' ||
+      (record.metadata?.Label==='adult' && record.metadata?.ListType!=='White'))) {
     return s3Error('AccessDenied',403);
   }
   const type=node.mime || 'application/octet-stream';
@@ -301,7 +303,7 @@ async function handleRequest(context) {
         const parent=await resolve(db,bucket,dir);
         const sourceId=record.source_id, mime=record.mime,now=Date.now();
         const metadata={Channel:'CloudflareR2',FileName:name,FileType:mime,FileSize:(completed.size/1048576).toFixed(2),FileSizeBytes:completed.size,
-          TimeStamp:now,Directory:'disk-s3/',ListType:'None'};
+          TimeStamp:now,Directory:'disk-s3/',ListType:'Block',DiskS3Private:true};
         // If metadata/index completion fails, the R2 object remains recoverable
         // under sourceId. Never delete completed R2 bytes in this case.
         await getDatabase(env).put(sourceId,'',{metadata});
@@ -361,7 +363,7 @@ async function handleRequest(context) {
       }
       await env.img_r2.put(fileId,payload,{httpMetadata:{contentType}});
       const metadata={Channel:'CloudflareR2',FileName:name,FileType:contentType,
-        FileSize:(contentLength/1048576).toFixed(2),FileSizeBytes:contentLength,TimeStamp:Date.now(),Directory:'disk-s3/',ListType:'None'};
+        FileSize:(contentLength/1048576).toFixed(2),FileSizeBytes:contentLength,TimeStamp:Date.now(),Directory:'disk-s3/',ListType:'Block',DiskS3Private:true};
       try {
         await getDatabase(env).put(fileId,'',{metadata});
         await insertNode(db,{id:uuid(),space_id:bucket,parent_id:parent.id,name,
