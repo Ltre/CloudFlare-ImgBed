@@ -41,6 +41,7 @@ The current Mocha entry point automatically loads `.js` test files directly insi
 | Image processing | [imageProcessing.test.js](imageProcessing.test.js) | `functions/file/imageTransform.js` | Parameter validation, processor format support, historical generic types, original-image fallback, input formats and output headers |
 | AI tags | [ai.test.js](ai.test.js) | `api/manage/ai/tags.js` | Original formats, preview-type normalization, signatures and size limits; AI invocation only for valid input |
 | Shared file-type rules | [fileTypes.test.js](fileTypes.test.js) | `utils/mimeTypes.js` | MIME normalization, case-sensitive parameters, explicit-type precedence, extension inference, unknown/ambiguous extensions and random-image keywords versus strict classification |
+| Virtual disk | [disk.test.js](disk.test.js) | `functions/utils/disk/`, `functions/api/disk/`, `functions/s3/` | D1 tree, empty folders, cross-space copy/move, share boundaries, token hashing and public toggles |
 | Server imports | [smoke/serverImports.mjs](smoke/serverImports.mjs) | Main routes above and `functions/dav/` | Unmodified route imports and handler exports through the production loader |
 
 Business paths in the table are relative to `functions/`, except those already starting with `functions/`. Extend the relevant suite when changing one feature. A substantial independent feature can have its own module; add its entry points, scope and boundaries here instead of accumulating unrelated behavior in one file.
@@ -52,6 +53,7 @@ Business paths in the table are relative to `functions/`, except those already s
 - Deletion covers single-file and batch APIs, not recursive folder deletion or every remote channel's failure semantics.
 - Updates cover metadata and individual R2 renames/moves, not recursive directory moves, migrations across all channels or recovery from every intermediate failure.
 - Image processing, AI and random-image tests cover the behavior listed above. Extend their suites when those features change.
+- Disk tests run on an in-memory D1 SQLite emulator and do not check Cloudflare production data, media streaming, concurrent writes, real S3 interoperability or browser UI.
 - Storage requests, cache invalidation and AI calls use doubles. There are no live cloud end-to-end tests, complete Docker image startup checks, browser UI tests or production Cloudflare deployment checks.
 
 Keep gaps explicit here until the corresponding tests exist. Passing CI does not establish that every basic capability has been verified.
