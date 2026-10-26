@@ -41,12 +41,9 @@ function xmlDecode(value) {
     if(!Number.isInteger(cp)||cp<1||cp>0x10ffff||(cp>=0xd800&&cp<=0xdfff))throw new DiskError('MalformedXML');
     return String.fromCodePoint(cp);
   });
-  if(/&(?:#|[a-z])/i.test(decoded) && /&(?!(?:amp|lt|gt|quot|apos);)/i.test(value)) {
-    // Unknown XML entities must never be silently accepted.
-    const unknown=String(value).match(/&[^\s;]+;/g)||[];
-    if(unknown.some(x=>!/^(?:&(?:amp|lt|gt|quot|apos|#x[0-9a-fA-F]+|#\d+);)$/.test(x)))
-      throw new DiskError('MalformedXML');
-  }
+  // A bare ampersand or an unknown entity is malformed XML.
+  if(String(value).replace(/&(?:amp|lt|gt|quot|apos|#x[0-9a-fA-F]+|#\d+);/g,'').includes('&'))
+    throw new DiskError('MalformedXML');
   return decoded;
 }
 export function parseDeleteObjectsXml(body) {
