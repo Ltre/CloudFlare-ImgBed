@@ -678,33 +678,38 @@ async function handleR2File(context, fileId, encodedFileName, fileType) {
 
         const R2DataBase = env.img_r2;
 
-        // 检查Range请求头
         const range = request.headers.get('Range');
         let object;
-
-        if (range) {
-            // 处理Range请求
-            const matches = range.match(/bytes=(\d+)-(\d*)/);
-            if (matches) {
-                const start = parseInt(matches[1]);
-                const end = matches[2] ? parseInt(matches[2]) : undefined;
-
-                const rangeOptions = {
-                    range: {
-                        offset: start
-                    }
-                };
-                if (end !== undefined) {
-                    rangeOptions.range.length = end - start + 1;
-                }
-
-                object = await R2DataBase.get(fileId, rangeOptions);
-            } else {
-                object = await R2DataBase.get(fileId);
-            }
-        } else {
-            object = await R2DataBase.get(fileId);
+        // HEAD uses metadata only; never open a multi-GB response stream.
+        if (request.method === 'HEAD' && !range && typeof R2DataBase.head === 'function') {
+            const info=await R2DataBase.head(fileId);
+            if(!info)return new Response('Not Found',{status:404});
+            const headers=new Headers();
+            if(info.writeHttpMetadata)info.writeHttpMetadata(headers);
+            setCommonHeaders(headers,encodedFileName,fileType,getFileCacheControl(context));
+            headers.set('Content-Length',String(info.size));
+            return handleHeadRequest(headers,info.httpEtag||null);
         }
+        const info = range && typeof R2DataBase.head==='function'
+            ? await R2DataBase.head(fileId) : null;
+        if(range && info===null && typeof R2DataBase.head==='function')return new Response('Not Found',{status:404});
+        const ifRange=request.headers.get('If-Range');
+        const effectiveRange=ifRange && info?.httpEtag && ifRange!==info.httpEtag ? null : range;
+        if(effectiveRange && info){
+            const parsed=parseSingleByteRange(effectiveRange,info.size);
+            if(!parsed)return new Response(null,{status:416,headers:{
+              'Content-Range':'bytes */'+info.size,'Accept-Ranges':'bytes'
+            }});
+            object=await R2DataBase.get(fileId,{range:{offset:parsed.start,length:parsed.end-parsed.start+1}});
+        }else if(effectiveRange){
+            const m=/^bytes=(\d+)-(\d*)$/.exec(effectiveRange);
+            if(m){
+                const start=Number(m[1]),end=m[2]?Number(m[2]):undefined;
+                if(!Number.isSafeInteger(start)||end!==undefined&&(!Number.isSafeInteger(end)||end<start))
+                    return new Response(null,{status:416});
+                object=await R2DataBase.get(fileId,{range:{offset:start,...(end!==undefined?{length:end-start+1}:{})}});
+            }else object=await R2DataBase.get(fileId);
+        }else object=await R2DataBase.get(fileId);
 
         if (object === null) {
             return new Response('Error: Failed to fetch file', { status: 500 });
@@ -720,7 +725,7 @@ async function handleR2File(context, fileId, encodedFileName, fileType) {
         }
 
         // 如果是Range请求，设置相应的状态码和头
-        if (range && object.range) {
+        if (effectiveRange && object.range) {
             headers.set('Content-Range', `bytes ${object.range.offset}-${object.range.offset + object.range.length - 1}/${object.size}`);
             headers.set('Content-Length', object.range.length.toString());
 

@@ -20,6 +20,13 @@ export class LocalR2Storage {
         return join(this.basePath, key);
     }
 
+    /** Cloudflare R2 head() emulation for zero-copy metadata lookups. */
+    async head(key) {
+        const filePath=this._filePath(key);
+        if(!existsSync(filePath))return null;
+        return {size:statSync(filePath).size,httpMetadata:{},writeHttpMetadata(){}};
+    }
+
     /**
      * 获取文件（模拟 R2 的 get 方法）
      * 支持 Range 请求
