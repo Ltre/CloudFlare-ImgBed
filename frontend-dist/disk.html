@@ -42,7 +42,7 @@ label{color:var(--muted);display:block;font-size:12px;margin-bottom:6px}.wide{wi
 <div id="breadcrumb" class="breadcrumb"></div>
 <div class="toolbar">
 <button class="primary" id="folder">+ 新建文件夹</button>
-<button id="attach">关联已有文件</button>
+<button id="attach">关联已有文件</button><button id="upload">上传文件</button><input type="file" id="uploadFiles" multiple hidden><select id="uploadChannel"><option value="telegram">Telegram</option><option value="cfr2">R2</option><option value="s3">S3</option><option value="discord">Discord</option><option value="huggingface">HuggingFace</option><option value="webdav">WebDAV</option></select>
 <button id="shareFolder">分享当前文件夹</button>
 <button id="back">上一级</button>
 </div></section>
@@ -84,7 +84,7 @@ async function refreshSpaces() {
   state.role=state.key?(state.spaces.find(s=>s.id===state.space)?.role||'read'):'admin';
   $('#role').textContent=state.key?('协同访问 · '+(state.role==='write'?'可编辑':'只读')):'管理员视图';
   for(const id of ['addSpace','renameSpace','deleteSpace','grant','grants'])$('#'+id).hidden=!!state.key;
-  for(const id of ['folder','attach','shareFolder'])$('#'+id).disabled=state.role==='read';
+  for(const id of ['folder','attach','shareFolder','upload','uploadChannel'])$('#'+id).disabled=state.role==='read';
   if(state.space) await browse(); else {state.entries=[];$('#entries').replaceChildren();$('#breadcrumb').replaceChildren();}
 }
 async function browse(path=state.path) {
@@ -187,6 +187,36 @@ $('#attach').onclick=async()=>{const sourceId=prompt('已有 ImgBed 文件 ID（
  const name=prompt('在网盘中的文件名称（可留空）','');if(name===null)return;
  try{await api('import','POST',{space:state.space,path:state.path,sourceId,name});await browse();}catch(e){err(e);}};
 $('#shareFolder').onclick=()=>state.path?share(state.path):status('不能分享网盘根目录；请进入具体文件夹。',true);
+$('#upload').onclick=()=>$('#uploadFiles').click();
+$('#uploadFiles').onchange=async function(){
+  const selected=Array.from(this.files||[]);
+  this.value='';
+  if(!selected.length || !state.space)return;
+  const space=state.space, folder=state.path, channel=$('#uploadChannel').value;
+  let uploaded=0;
+  for(const file of selected){
+    try{
+      status('上传 '+file.name+' · '+(uploaded+1)+'/'+selected.length);
+      // Reuse ImgBed's existing multipart/form-data upload, do not create a new storage pipeline.
+      const form=new FormData();form.append('file',file,file.name);
+      const params=qs({uploadChannel:channel,returnFormat:'full'});
+      const headers={};
+      if(state.key)headers['X-Disk-Token']=state.key;
+      const response=await fetch('/upload?'+params,{method:'POST',body:form,headers,credentials:'same-origin'});
+      if(!response.ok)throw new Error('上传失败 HTTP '+response.status+': '+(await response.text()).slice(0,180));
+      const uploadedData=await response.json();
+      const src=Array.isArray(uploadedData)?uploadedData[0]?.src:uploadedData?.src;
+      if(typeof src!=='string')throw new Error('ImgBed 未返回文件 ID');
+      const pathname=new URL(src,location.href).pathname;
+      if(!pathname.startsWith('/file/'))throw new Error('返回的文件路径不符合 ImgBed 格式');
+      const sourceId=pathname.slice(6).split('/').map(decodeURIComponent).join('/');
+      await api('import','POST',{space,path:folder,sourceId,name:file.name});
+      uploaded++;
+    }catch(e){err(new Error(file.name+': '+e.message));break;}
+  }
+  if(uploaded===selected.length)status('成功上传并关联 '+uploaded+' 个文件');
+  try {await browse(folder);}catch(e){err(e);}
+};
 $('#addSpace').onclick=async()=>{const name=prompt('新分区名称');if(!name)return;try{const data=await api('spaces','POST',{name});state.space=data.space.id;state.path='';await refreshSpaces();}catch(e){err(e);}};
 $('#grant').onclick=async()=>{if(!state.space)return;
  const role=prompt('协同权限（read 或 write）','read');if(!role)return;
