@@ -4,7 +4,7 @@ import { SqliteD1 } from '../deploy/server/sqliteD1.js';
 import {
   DiskError,namePart,pathParts,breadcrumbs,createSpace,mkdir,resolve,list,
   insertNode,transfer,deleteTree,createShare,sharedNode,publicNode,createGrant,
-  hashToken,one,uuid
+  hashToken,one,uuid,parseGrantTokens
 } from '../functions/utils/disk/core.js';
 
 describe('D1 virtual disk, shares and cross-partition operations', () => {
@@ -22,6 +22,12 @@ describe('D1 virtual disk, shares and cross-partition operations', () => {
     assert.deepEqual(breadcrumbs('文档/2026').map(c=>c.path),['','文档','文档/2026']);
     for(const path of ['/etc','a/../b','a//b','a\\b','a/']) assert.throws(()=>pathParts(path),DiskError);
     for(const name of ['','.','..','a/b','a\nb']) assert.throws(()=>namePart(name),DiskError);
+  });
+  it('supports multiple scoped collaboration tokens in one request',()=>{
+    const first='a'.repeat(64),second='b'.repeat(64);
+    const request={headers:{get:n=>n==='X-Disk-Token'?first+', '+second:null}};
+    assert.deepEqual(parseGrantTokens(request),[first,second]);
+    assert.throws(()=>parseGrantTokens({headers:{get:n=>n==='X-Disk-Token'?'bad':null}}),{code:'INVALID_DISK_TOKEN'});
   });
   it('persists empty nested folders',async()=>{
     await mkdir(db,a.id,'','2026');

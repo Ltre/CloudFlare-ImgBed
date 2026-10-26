@@ -58,7 +58,7 @@ Both deployment targets reuse standard Web APIs and D1/R2; there are **no Node.j
 | GET, HEAD /api/disk-share/:token/:subpath | Public share file stream |
 | GET, HEAD /disk-static/:space/:path | Explicitly public static file stream |
 
-A collaborator sends X-Disk-Token: <64-hex token> or Authorization: Bearer <token>. Tokens are SHA-256 hashes at rest and created with cryptographic randomness. Original blocked/restricted media remain subject to ImgBed's normal security policy even when a virtual share exists.
+A collaborator sends X-Disk-Token: <64-hex token> or Authorization: Bearer <token>. For cross-partition collaboration, X-Disk-Token accepts up to eight comma-separated grant keys in one request; the source and destination grants are validated independently. Tokens are SHA-256 hashes at rest and created with cryptographic randomness. Original blocked/restricted media remain subject to ImgBed's normal security policy even when a virtual share exists.
 
 ## S3 gateway
 
