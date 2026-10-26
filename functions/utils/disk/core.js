@@ -67,8 +67,9 @@ export async function access(context, space, role = 'read') {
   if (!(await one(db, 'SELECT id FROM disk_spaces WHERE id=?', space))) {
     throw new DiskError('SPACE_NOT_FOUND', 404);
   }
-  if (await adminAllowed(context)) return { kind: 'admin', role: 'write' };
-  const header = context.request.headers.get('X-Disk-Token') ||
+  const explicitKey = context.request.headers.get('X-Disk-Token');
+  if (explicitKey === null && await adminAllowed(context)) return { kind: 'admin', role: 'write' };
+  const header = explicitKey !== null ? explicitKey :
     (context.request.headers.get('Authorization') || '').replace(/^Bearer /i, '');
   if (header && /^[0-9a-f]{64}$/i.test(header)) {
     const hash = await hashToken(header);

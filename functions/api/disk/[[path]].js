@@ -12,7 +12,6 @@ import {
  */
 export async function onRequest(context) {
   const { request, env } = context;
-  const db = requireDiskDb(env);
   const url = new URL(request.url);
   const segments = Array.isArray(context.params?.path) ? context.params.path :
     String(context.params?.path || '').split('/').filter(Boolean);
@@ -20,6 +19,7 @@ export async function onRequest(context) {
   const method = request.method;
   if (method === 'OPTIONS') return new Response(null,{status:204,headers:{Allow:'GET,HEAD,POST,DELETE,OPTIONS'}});
   try {
+    const db = requireDiskDb(env);
     let body = {};
     if (method === 'POST') {
       try { body = await request.json(); } catch (_) { throw new DiskError('INVALID_JSON'); }
@@ -27,11 +27,11 @@ export async function onRequest(context) {
     }
     if (action === 'spaces') {
       if (method === 'GET') {
-        const admin = await adminAllowed(context);
+        const admin = !request.headers.has('X-Disk-Token') && await adminAllowed(context);
         if (admin) return respond({success:true,spaces:await all(db,'SELECT * FROM disk_spaces ORDER BY created_at')});
         const token = request.headers.get('X-Disk-Token') || (request.headers.get('Authorization') || '').replace(/^Bearer /i, '');
         if (!/^[0-9a-f]{64}$/i.test(token || '')) throw new DiskError('DISK_FORBIDDEN',403);
-        const found = await all(db,'SELECT s.* FROM disk_spaces s JOIN disk_grants g ON g.space_id=s.id WHERE g.token_hash=?',await hashToken(token));
+        const found = await all(db,'SELECT s.*,g.role FROM disk_spaces s JOIN disk_grants g ON g.space_id=s.id WHERE g.token_hash=?',await hashToken(token));
         if (!found.length) throw new DiskError('DISK_FORBIDDEN',403);
         return respond({success:true,spaces:found});
       }
