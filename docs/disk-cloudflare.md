@@ -67,7 +67,7 @@ Path-style endpoint: https://YOUR-DOMAIN/s3
 Bucket name: the virtual partition UUID (ListBuckets lists the UUIDs).  
 Authorization: AWS Signature V4 via Authorization header or X-Amz presigned URL, configured with encrypted DISK_S3_ACCESS_KEY / DISK_S3_SECRET_KEY environment variables.
 
-Implemented: ListBuckets, HeadBucket, ListObjects, ListObjectsV2, GetObject, HeadObject, PutObject (requires R2), DeleteObject (virtual unlink), CopyObject (virtual metadata copy), GET byte ranges, ETag for new R2 objects. PUT of large signed-hash payloads requires unsigned-payload streaming mode or the original ImgBed uploader.
+Implemented: ListBuckets, HeadBucket, ListObjects, ListObjectsV2, GetObject, HeadObject, PutObject (requires R2), DeleteObject and DeleteObjects (virtual unlink), CopyObject (virtual metadata copy), GET byte ranges, ETag for new R2 objects. PUT of large signed-hash payloads requires unsigned-payload streaming mode or the original ImgBed uploader.
 
 **Not implemented (S3 subset, not full S3 parity):** CreateBucket, DeleteBucket, bucket ACL/IAM, versioning, object tagging, complete AWS conditional request matrix, native external-provider PUT. PutObject, CopyObject and multipart completion use copy-on-write replacement of the target virtual object. Previous physical source bytes are conservatively retained to avoid destroying copies in other partitions; automatic orphan storage reclamation is not yet implemented. S3 credentials currently grant access to all disk partitions; they are not individual collaborator permissions.
 
@@ -108,3 +108,5 @@ Original ImgBed file deletion is prevented while a virtual disk still references
 Cross-origin browser SDK clients must configure the optional `DISK_S3_CORS_ORIGINS` setting as a comma-separated allowlist of exact origins, such as `https://app.example.org`. The S3 gateway allows its own origin by default and handles OPTIONS preflight without requiring a signature; actual S3 API requests still require SigV4 authentication. S3 API responses are private/no-store.
 
 The branch's regression workflow now attempts a Pages Functions build and a **Workers dry-run build** to catch bundle/routing regressions before production deployment. Dry run is not an online deployment. Operators must still verify D1 migrations and configured secrets/bindings in both real Cloudflare environments.
+
+Bulk S3 DeleteObjects (up to 1,000 keys/request) is supported with XML input. Both single and bulk deletion unlink virtual objects, preserving their underlying provider bytes when other references may exist; unreferenced R2 data is retained for later garbage collection.

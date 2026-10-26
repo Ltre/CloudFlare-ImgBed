@@ -33,6 +33,38 @@ async function hmac(key,value) {
 async function sha256(text) {
   return signatureHex(await crypto.subtle.digest('SHA-256',encoder.encode(text)));
 }
+function xmlDecode(value) {
+  const decoded=String(value).replace(/&(#x[0-9a-fA-F]+|#\d+|amp|lt|gt|quot|apos);/g,(_,tag)=>{
+    const common={amp:'&',lt:'<',gt:'>',quot:'"',apos:"'"};
+    if(tag in common)return common[tag];
+    const cp=tag.startsWith('#x')?parseInt(tag.slice(2),16):parseInt(tag.slice(1),10);
+    if(!Number.isInteger(cp)||cp<1||cp>0x10ffff||(cp>=0xd800&&cp<=0xdfff))throw new DiskError('MalformedXML');
+    return String.fromCodePoint(cp);
+  });
+  if(/&(?:#|[a-z])/i.test(decoded) && /&(?!(?:amp|lt|gt|quot|apos);)/i.test(value)) {
+    // Unknown XML entities must never be silently accepted.
+    const unknown=String(value).match(/&[^\s;]+;/g)||[];
+    if(unknown.some(x=>!/^(?:&(?:amp|lt|gt|quot|apos|#x[0-9a-fA-F]+|#\d+);)$/.test(x)))
+      throw new DiskError('MalformedXML');
+  }
+  return decoded;
+}
+export function parseDeleteObjectsXml(body) {
+  if(typeof body!=='string'||body.length>1024*1024)throw new DiskError('MalformedXML');
+  const m=/^\s*(?:<\?xml[^>]*>\s*)?<Delete(?:\s[^>]*)?>([\s\S]*?)<\/Delete>\s*$/.exec(body);
+  if(!m)throw new DiskError('MalformedXML');
+  const quiet=/<Quiet>\s*true\s*<\/Quiet>/i.test(m[1]);
+  const withoutQuiet=m[1].replace(/<Quiet>\s*(?:true|false)\s*<\/Quiet>/gi,'');
+  const re=/<Object>\s*<Key>([^<]*)<\/Key>\s*<\/Object>/g;
+  const objects=[];
+  for(const x of withoutQuiet.matchAll(re)){
+    const key=xmlDecode(x[1]);if(!key)throw new DiskError('InvalidObjectName');
+    objects.push(key);
+  }
+  if(!objects.length||objects.length>1000||withoutQuiet.replace(re,'').trim())
+    throw new DiskError('MalformedXML');
+  return {keys:objects,quiet};
+}
 function s3Error(code,status=400,description='') {
   return new Response('<?xml version="1.0" encoding="UTF-8"?><Error><Code>' + xml(code) +
     '</Code><Message>' + xml(description || code) + '</Message></Error>',
@@ -245,6 +277,26 @@ async function handleRequest(context) {
     if (!(await one(db,'SELECT id FROM disk_spaces WHERE id=?',bucket))) return s3Error('NoSuchBucket',404);
     if (!parts.length) {
       if (method==='HEAD') return new Response(null,{status:200});
+      if (method==='POST' && url.searchParams.has('delete')) {
+        const body=await request.text();
+        const hash=request.headers.get('x-amz-content-sha256');
+        if(hash && /^[0-9a-f]{64}$/i.test(hash) && !constantEqual(await sha256(body),hash.toLowerCase()))
+          return s3Error('XAmzContentSHA256Mismatch',400);
+        const {keys,quiet}=parseDeleteObjectsXml(body);
+        let items='';
+        for(const objectKey of keys){
+          let item=null;
+          try {item=await resolve(db,bucket,objectKey,false);}
+          catch(e){if(e.code!=='NODE_NOT_FOUND')throw e;}
+          if(item && item.kind!=='file'){
+            items+='<Error><Key>'+xml(objectKey)+'</Key><Code>AccessDenied</Code></Error>';
+            continue;
+          }
+          if(item)await deleteTree(db,item);
+          if(!quiet)items+='<Deleted><Key>'+xml(objectKey)+'</Key></Deleted>';
+        }
+        return xmlResponse('<DeleteResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'+items+'</DeleteResult>');
+      }
       if (method==='GET' && url.searchParams.has('uploads')) {
         const uploads=await listUploads(db,bucket);
         return xmlResponse('<ListMultipartUploadsResult><Bucket>'+xml(bucket)+'</Bucket>'+
