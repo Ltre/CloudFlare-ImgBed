@@ -4,6 +4,7 @@
  * No Node.js APIs: the same code runs on Pages Functions and Workers.
  */
 import { authenticate, AUTH_SCOPE } from '../auth/authCore.js';
+import { fetchSecurityConfig } from '../sysConfig.js';
 import { getDatabase } from '../databaseAdapter.js';
 
 export class DiskError extends Error {
@@ -64,6 +65,10 @@ export function parseGrantTokens(request) {
   return tokens;
 }
 export async function adminAllowed(context) {
+  // ImgBed normally permits management when administrator auth is unconfigured.
+  // Publicly accessible virtual disks/shares must fail closed instead.
+  const config=await fetchSecurityConfig(context.env,{throwOnError:true});
+  if (!config.auth?.admin?.adminUsername || !config.auth?.admin?.adminPassword) return false;
   const result = await authenticate({
     env: context.env, request: context.request,
     requiredPermission: 'manage', authScope: AUTH_SCOPE.ADMIN
@@ -157,7 +162,7 @@ export async function linkFile(env, db, spaceId, path, sourceId, name) {
     name: namePart(name || record.metadata.FileName || sourceId.split('/').at(-1)),
     kind: 'file', source_id: sourceId,
     mime: record.metadata.FileType || 'application/octet-stream',
-    size: Math.max(0, Number(record.metadata.FileSize) || 0),
+    size: Math.max(0, Math.round(Number(record.metadata.FileSizeBytes) || Number(record.metadata.FileSize || 0)*1048576)),
     is_public: 0, created_at: Date.now(), updated_at: Date.now() };
   await insertNode(db, n);
   return n;

@@ -293,7 +293,7 @@ export async function onRequest(context) {
         const name=parts.at(-1),dir=parts.slice(0,-1).join('/');
         const parent=await resolve(db,bucket,dir);
         const sourceId=record.source_id, mime=record.mime,now=Date.now();
-        const metadata={Channel:'CloudflareR2',FileName:name,FileType:mime,FileSize:String(completed.size),
+        const metadata={Channel:'CloudflareR2',FileName:name,FileType:mime,FileSize:(completed.size/1048576).toFixed(2),FileSizeBytes:completed.size,
           TimeStamp:now,Directory:'disk-s3/',ListType:'None'};
         // If metadata/index completion fails, the R2 object remains recoverable
         // under sourceId. Never delete completed R2 bytes in this case.
@@ -354,7 +354,7 @@ export async function onRequest(context) {
       }
       await env.img_r2.put(fileId,payload,{httpMetadata:{contentType}});
       const metadata={Channel:'CloudflareR2',FileName:name,FileType:contentType,
-        FileSize:String(contentLength),TimeStamp:Date.now(),Directory:'disk-s3/',ListType:'None'};
+        FileSize:(contentLength/1048576).toFixed(2),FileSizeBytes:contentLength,TimeStamp:Date.now(),Directory:'disk-s3/',ListType:'None'};
       try {
         await getDatabase(env).put(fileId,'',{metadata});
         await insertNode(db,{id:uuid(),space_id:bucket,parent_id:parent.id,name,
