@@ -3,9 +3,10 @@
  * 使用本地文件系统模拟 Cloudflare R2 的 API 接口
  */
 
-import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync, readdirSync, statSync, rmSync } from 'fs';
+import { readFileSync, writeFileSync, unlinkSync, renameSync, existsSync, mkdirSync, readdirSync, statSync, rmSync } from 'fs';
 import { dirname, join } from 'path';
-import { createReadStream } from 'fs';
+import { createReadStream, createWriteStream } from 'fs';
+import { pipeline } from 'stream/promises';
 import { Readable } from 'stream';
 import { randomUUID } from 'crypto';
 
@@ -159,20 +160,32 @@ export class LocalR2Storage {
             },
 
             async complete(parts) {
-                // 按 partNumber 排序合并所有分块
-                const sortedParts = parts.sort((a, b) => a.partNumber - b.partNumber);
-                const chunks = [];
-                for (const part of sortedParts) {
+                // Stream all parts; a multi-GB object must not enter process memory.
+                const sortedParts = [...parts].sort((a, b) => a.partNumber - b.partNumber);
+                const partPaths = sortedParts.map(part => {
                     const partPath = join(uploadDir, `part_${String(part.partNumber).padStart(6, '0')}`);
-                    if (existsSync(partPath)) {
-                        chunks.push(readFileSync(partPath));
+                    if (!existsSync(partPath) || part.etag !== `etag_${part.partNumber}`) {
+                        throw new Error('R2_PART_MISSING_OR_MISMATCH');
                     }
+                    return partPath;
+                });
+                const target = self._filePath(key);
+                mkdirSync(dirname(target), { recursive: true });
+                const temp = target + '.' + randomUUID() + '.uploading';
+                try {
+                    await pipeline(Readable.from((async function* () {
+                        for (const partPath of partPaths) {
+                            for await (const chunk of createReadStream(partPath)) yield chunk;
+                        }
+                    })()), createWriteStream(temp));
+                    // Atomic publish only after all parts have streamed successfully.
+                    renameSync(temp, target);
+                    self._cleanupDir(uploadDir);
+                    return { etag: 'local-' + randomUUID() };
+                } catch (e) {
+                    if (existsSync(temp)) unlinkSync(temp);
+                    throw e;
                 }
-                const merged = Buffer.concat(chunks);
-                await self.put(key, merged);
-
-                // 清理分块目录
-                self._cleanupDir(uploadDir);
             },
 
             async abort() {
