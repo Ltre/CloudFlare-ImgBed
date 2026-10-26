@@ -69,7 +69,7 @@ Authorization: AWS Signature V4 via Authorization header or X-Amz presigned URL,
 
 Implemented: ListBuckets, HeadBucket, ListObjects, ListObjectsV2, GetObject, HeadObject, PutObject (requires R2), DeleteObject (virtual unlink), CopyObject (virtual metadata copy), GET byte ranges, ETag for new R2 objects. PUT of large signed-hash payloads requires unsigned-payload streaming mode or the original ImgBed uploader.
 
-**Not implemented (S3 subset, not full S3 parity):** CreateBucket, DeleteBucket, bucket ACL/IAM, versioning, object tagging, universal overwrite behavior, complete AWS conditional request matrix, native external-provider PUT. S3 credentials currently grant access to all disk partitions; they are not individual collaborator permissions.
+**Not implemented (S3 subset, not full S3 parity):** CreateBucket, DeleteBucket, bucket ACL/IAM, versioning, object tagging, complete AWS conditional request matrix, native external-provider PUT. PutObject, CopyObject and multipart completion use copy-on-write replacement of the target virtual object. Previous physical source bytes are conservatively retained to avoid destroying copies in other partitions; automatic orphan storage reclamation is not yet implemented. S3 credentials currently grant access to all disk partitions; they are not individual collaborator permissions.
 
 ## Safety and limitations
 

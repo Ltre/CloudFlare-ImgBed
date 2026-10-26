@@ -115,6 +115,20 @@ function xmlResponse(text,status=200,headers={}) {
 function objectName(node,key) {
   return {key,size:node.size,mime:node.mime};
 }
+async function upsertObjectNode(db,spaceId,parent,name,prior,sourceId,mime,size) {
+  if(prior && prior.kind!=='file') throw new DiskError('NAME_CONFLICT',409);
+  const now=Date.now();
+  if(prior) {
+    // Copy-on-write metadata: other partitions continue referencing old bytes.
+    await run(db,'UPDATE disk_nodes SET source_id=?,mime=?,size=?,is_public=0,updated_at=? WHERE id=? AND space_id=?',
+      sourceId,mime,size,now,prior.id,spaceId);
+    return prior.id;
+  }
+  const id=uuid();
+  await insertNode(db,{id,space_id:spaceId,parent_id:parent.id,name,kind:'file',
+    source_id:sourceId,mime,size,is_public:0,created_at:now,updated_at:now});
+  return id;
+}
 async function ensureParents(db,spaceId,parts) {
   let prefix='';
   for (const part of parts) {
@@ -247,7 +261,7 @@ async function handleRequest(context) {
     // AWS S3 Multipart Upload: POST ?uploads, PUT ?partNumber&uploadId,
     // GET/POST/DELETE ?uploadId. All operations are subject to SigV4 above.
     if(method==='POST' && url.searchParams.has('uploads')) {
-      if (node) return s3Error('ObjectAlreadyExists',409);
+      if(node && node.kind!=='file') return s3Error('ObjectAlreadyExists',409);
       await ensureParents(db,bucket,parts.slice(0,-1));
       const mime=request.headers.get('Content-Type')||'application/octet-stream';
       const upload=await initMultipart(db,env.img_r2,bucket,key,mime);
@@ -291,7 +305,7 @@ async function handleRequest(context) {
           return xmlResponse('<CompleteMultipartUploadResult><Bucket>'+xml(bucket)+
             '</Bucket><Key>'+xml(key)+'</Key></CompleteMultipartUploadResult>');
         }
-        if (node) return s3Error('ObjectAlreadyExists',409);
+        if(node && node.kind!=='file') return s3Error('ObjectAlreadyExists',409);
         const xmlBody=await request.text();
         const declaredHash=request.headers.get('x-amz-content-sha256');
         if (declaredHash && /^[a-f0-9]{64}$/i.test(declaredHash) &&
@@ -307,8 +321,7 @@ async function handleRequest(context) {
         // If metadata/index completion fails, the R2 object remains recoverable
         // under sourceId. Never delete completed R2 bytes in this case.
         await getDatabase(env).put(sourceId,'',{metadata});
-        await insertNode(db,{id:uuid(),space_id:bucket,parent_id:parent.id,name,kind:'file',
-          source_id:sourceId,mime,size:completed.size,is_public:0,created_at:now,updated_at:now});
+        await upsertObjectNode(db,bucket,parent,name,node,sourceId,mime,completed.size);
         await clearMultipart(db,record);
         if(context.waitUntil) context.waitUntil(addFileToIndex(context,sourceId,metadata));
         return xmlResponse('<CompleteMultipartUploadResult><Location>'+xml(request.url.split('?')[0])+
@@ -326,7 +339,7 @@ async function handleRequest(context) {
       return new Response(null,{status:204});
     }
     if (method==='PUT' && request.headers.has('x-amz-copy-source')) {
-      if (node) return s3Error('ObjectAlreadyExists',409);
+      if(node && node.kind!=='file') return s3Error('ObjectAlreadyExists',409);
       const copyPath=decodeURIComponent(request.headers.get('x-amz-copy-source')).replace(/^\//,'');
       const idx=copyPath.indexOf('/');
       if (idx<0) return s3Error('InvalidArgument');
@@ -336,13 +349,12 @@ async function handleRequest(context) {
       if (source.kind!=='file') return s3Error('NoSuchKey',404);
       await ensureParents(db,bucket,parts.slice(0,-1));
       const now=Date.now(),parent=await resolve(db,bucket,dir);
-      await insertNode(db,{id:uuid(),space_id:bucket,parent_id:parent.id,name,kind:'file',
-        source_id:source.source_id,mime:source.mime,size:source.size,is_public:0,created_at:now,updated_at:now});
+      await upsertObjectNode(db,bucket,parent,name,node,source.source_id,source.mime,source.size);
       return xmlResponse('<CopyObjectResult><LastModified>'+new Date(now).toISOString()+'</LastModified></CopyObjectResult>');
     }
     if (method==='PUT') {
       if (!env.img_r2) return s3Error('ServiceUnavailable',503,'R2 binding is required for S3 PutObject');
-      if (node) return s3Error('ObjectAlreadyExists',409);
+      if(node && node.kind!=='file') return s3Error('ObjectAlreadyExists',409);
       const fileId='disk-s3/'+uuid(),contentType=request.headers.get('Content-Type')||'application/octet-stream';
       const contentLength=Number(request.headers.get('Content-Length'));
       if (!Number.isSafeInteger(contentLength) || contentLength<0) return s3Error('MissingContentLength',411);
@@ -366,9 +378,7 @@ async function handleRequest(context) {
         FileSize:(contentLength/1048576).toFixed(2),FileSizeBytes:contentLength,TimeStamp:Date.now(),Directory:'disk-s3/',ListType:'Block',DiskS3Private:true};
       try {
         await getDatabase(env).put(fileId,'',{metadata});
-        await insertNode(db,{id:uuid(),space_id:bucket,parent_id:parent.id,name,
-          kind:'file',source_id:fileId,mime:contentType,size:contentLength,is_public:0,
-          created_at:Date.now(),updated_at:Date.now()});
+        await upsertObjectNode(db,bucket,parent,name,node,fileId,contentType,contentLength);
       }catch(e) { await env.img_r2.delete(fileId);try { await getDatabase(env).delete(fileId); } catch (_) {} throw e; }
       if (context.waitUntil) context.waitUntil(addFileToIndex(context,fileId,metadata));
       return new Response(null,{status:200,headers:{ETag:'"'+fileId.split('/')[1]+'"'}});
