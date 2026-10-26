@@ -153,6 +153,8 @@ export async function onRequest(context) {
       await access(context,body.space,'read');
       const node=await resolve(db,body.space,body.path,false);
       if (node.kind !== 'file') throw new DiskError('NOT_FILE');
+      // Opportunistically remove expired one-time capabilities without cron.
+      await run(db,'DELETE FROM disk_shares WHERE expires_at IS NOT NULL AND expires_at < ?',Date.now());
       const token=issueToken(), id=uuid(), expiresAt=Date.now()+300000;
       await run(db,'INSERT INTO disk_shares(id,space_id,node_id,label,token_hash,expires_at,created_at) VALUES(?,?,?,?,?,?,?)',
         id,body.space,node.id,'临时预览',await hashToken(token),expiresAt,Date.now());
@@ -160,10 +162,12 @@ export async function onRequest(context) {
     }
     if (action === 'source' && method === 'GET') {
       const s = url.searchParams.get('space'), path = url.searchParams.get('path');
-      await access(context,s,'read');
+      const principal=await access(context,s,'read');
       const node = await resolve(db,s,path,false);
       if (node.kind !== 'file') throw new DiskError('NOT_FILE');
-      // The original ImgBed reader handles chunked/Range, security and CDN.
+      // Read-only collaborators use /preview capability tickets; never disclose
+      // the raw ImgBed source ID or privileged from=admin preview route.
+      if(principal.kind!=='admin')return respond({success:true,previewRequired:true});
       return respond({success:true,sourceId:node.source_id,
         previewUrl:'/file/' + node.source_id.split('/').map(encodeURIComponent).join('/') + '?from=admin',
         publicUrl:'/disk-static/' + encodeURIComponent(s) + '/' + path.split('/').map(encodeURIComponent).join('/')});
