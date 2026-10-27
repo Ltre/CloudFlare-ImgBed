@@ -62,3 +62,17 @@ npm run test:wrangler:local
 ```
 
 线上测试部署必须使用与生产隔离的 Cloudflare 绑定。没有 Cloudflare 测试账户/凭据时，不能用「代码可部署」替代 G2 的真实部署。用户在 G1 可先预验收，在 G3 逐项功能验收，G4 进行发布签收。
+
+## 2026-10-27 验收执行记录（本轮）
+
+- G0：已建立需求矩阵和五阶段验收合同；不自动扩张功能范围。
+- G1：未通过。Wrangler Pages/Workers HTTP 测试入口已补齐跨分区复制/移动、分享撤销、三级面包屑，并且 CI 配置将上传 `wrangler-http.log`；然而目前 GitHub API `actions/runs` 返回 **0 条执行记录**，当前助手容器未装 Wrangler 且不能连接 npm registry。因此没有可引用的 HTTP 运行通过证据。
+- 建立了仅用于验证、**不会自动合并**的 Draft PR：<https://github.com/Ltre/CloudFlare-ImgBed/pull/1>。如果 Actions 依然为 0，须核查该仓库 Actions 是否启用、是否需要批准执行，以及工作流是否在默认分支注册。G1 必须有真实退出码及日志。
+- G2：需要 Cloudflare 隔离测试环境的账户/绑定或部署权限，尚未开始。
+- G3/G4：明确待启动，绝不把测试用例存在或源码已提交视为已签收。
+
+### 当前阶段距离（按关口，不猜工作日）
+
+**离首次正式本地验收：** 还需通过 G1 一个关口（含所有本地单测、bundle 和 Wrangler HTTP 真实运行；出现 P0/P1 先修复）。
+**离最终功能验收：** 还需 G1、G2、G3 三个关口。
+**离完整交付结束：** 还需 G1、G2、G3、G4 四个关口。不能按提交数量换算百分比。

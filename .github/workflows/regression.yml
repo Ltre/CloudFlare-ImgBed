@@ -49,4 +49,17 @@ jobs:
           node deploy/worker/generate-routes.js
           npx --no-install wrangler deploy --config deploy/worker/wrangler.toml --dry-run --outdir data/ci-worker-build
       - name: Run actual Wrangler local HTTP integration tests (Pages and Workers)
-        run: npm run test:wrangler:local
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p data/acceptance
+          npm run test:wrangler:local 2>&1 | tee data/acceptance/wrangler-http.log
+
+      - name: Archive local acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: d2tunnel-g1-wrangler-${{ github.run_id }}
+          path: data/acceptance/wrangler-http.log
+          if-no-files-found: warn
+          retention-days: 30
