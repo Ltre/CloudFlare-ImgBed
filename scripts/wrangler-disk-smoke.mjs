@@ -98,7 +98,10 @@ async function smoke(base,space,writer,reader){
   const objectPath=space+'/docs/a.txt';
   const put=await s3(base,objectPath,'PUT',body,{'Content-Type':'text/plain',
     'Content-Length':String(body.length)});
-  check(put,200,'S3 PUT');await put.arrayBuffer();
+  check(put,200,'S3 PUT');
+  const sourceId='disk-s3/'+String(put.headers.get('ETag')||'').replace(/^"|"$/g,'');
+  assert.match(sourceId,/^disk-s3\/[a-f0-9-]{36}$/i);
+  await put.arrayBuffer();
   const get=await s3(base,objectPath);check(get,200,'S3 GET');
   assert.equal(await get.text(),body.toString());
   const range=await s3(base,objectPath,'GET',null,{Range:'bytes=0-4'});
@@ -106,8 +109,8 @@ async function smoke(base,space,writer,reader){
 
   const dir=await json(base,'/api/disk/browse'+query+'&path=docs',{token:reader});
   const file=dir.entries.find(e=>e.name==='a.txt');
-  assert.ok(file?.source_id?.startsWith('disk-s3/'));
-  const publicRaw=await fetch(base+'/file/'+file.source_id);
+  assert.ok(file && !('source_id' in file),'collaborator must not receive physical sourceId');
+  const publicRaw=await fetch(base+'/file/'+sourceId);
   assert.notEqual(await publicRaw.text(),body.toString(),'S3 private source leaked');
   check(await fetch(base+'/disk-static/'+space+'/docs/a.txt'),404,'private URL');
   await json(base,'/api/disk/public',{method:'POST',token:writer,

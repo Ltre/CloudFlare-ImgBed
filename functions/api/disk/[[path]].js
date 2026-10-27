@@ -75,8 +75,13 @@ export async function onRequest(context) {
     }
     if (action === 'browse' && method === 'GET') {
       const s = url.searchParams.get('space'), path = url.searchParams.get('path') || '';
-      await access(context,s,'read');
-      return respond({success:true,...await list(db,s,path)});
+      const principal=await access(context,s,'read');
+      const result=await list(db,s,path);
+      // Collaborator listings must not expose physical ImgBed storage IDs.
+      // Reading a file is still available via a time-limited preview ticket.
+      if(principal.kind!=='admin')
+        result.entries=result.entries.map(({source_id,...entry})=>entry);
+      return respond({success:true,...result});
     }
     if (action === 'mkdir' && method === 'POST') {
       await access(context,body.space,'write');

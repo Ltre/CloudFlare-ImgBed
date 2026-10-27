@@ -164,9 +164,9 @@ async function preview(n,path) {
   try {
     // Administrators use existing authenticated file route. Collaboration
     // readers may use a short-lived, random capability URL if necessary.
-    const fileUrl=state.key
-      ?(await api('preview','POST',{space:state.space,path})).url
-      :(await api('source','GET',null,{space:state.space,path})).previewUrl;
+    // Both administrator and collaborators use an authorized short-lived
+    // preview ticket. S3-private objects never go through raw /file routes.
+    const fileUrl=(await api('preview','POST',{space:state.space,path})).url;
     const mime=n.mime||'';
     const holder=$('#media');holder.replaceChildren();
     let media;
