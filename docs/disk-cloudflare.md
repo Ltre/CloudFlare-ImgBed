@@ -152,9 +152,9 @@ The local smoke command initializes its own D1 and seeded test access tokens; th
 
 GitHub Actions additionally runs this HTTP suite after unit tests and Pages/Workers bundle builds. Successful builds are **not** substitutes for a live Cloudflare deployment test; runtime behavior under production bindings and real S3 clients requires separate verification.
 
-### Wrangler Pages configuration filename
+### Wrangler Pages local configuration
 
-Wrangler Pages **does not accept arbitrary `pages dev --config <filename>` values**. The test runner temporarily copies `wrangler.disk-local.jsonc` to root `wrangler.jsonc`, refusing to overwrite any existing file, and removes it after testing. The `npm run dev:disk:pages` command uses a protective wrapper with the same behavior. Both local D1 migrations and the server use the same local persistence directory. `preview_database_id` is set to the local Pages binding name `img_d1`.
+Wrangler's current CLI exposes `--config` as a global option for `pages dev` and `d1 execute`. The local smoke runner passes the isolated `wrangler.disk-local.jsonc` explicitly; it **does not create or replace** the project's root `wrangler.jsonc` and never requires production credentials. Both Wrangler runtimes and CLI migrations share one temporary persistence directory. `preview_database_id` is bound to `img_d1` for Pages development.
 
 ### Crash-safe garbage collection (v2.8.3)
 

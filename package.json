@@ -17,7 +17,7 @@
     "test:wrangler:local": "node scripts/wrangler-disk-smoke.mjs --mode=both",
     "test:wrangler:pages": "node scripts/wrangler-disk-smoke.mjs --mode=pages",
     "test:wrangler:workers": "node scripts/wrangler-disk-smoke.mjs --mode=workers",
-    "dev:disk:pages": "node scripts/wrangler-disk-pages-dev.mjs",
+    "dev:disk:pages": "wrangler pages dev frontend-dist --config wrangler.disk-local.jsonc --persist-to .wrangler/disk-dev-state",
     "dev:disk:workers": "node deploy/worker/generate-routes.js && wrangler dev --config deploy/worker/wrangler.disk-local.jsonc --persist-to .wrangler/disk-dev-state"
   },
   "overrides": {
