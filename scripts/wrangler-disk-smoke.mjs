@@ -287,6 +287,31 @@ async function smoke(base,space,writer,reader,otherSpace,otherWriter){
   const listXml=await list.text();
   assert.match(listXml,/a\.txt/);
   assert.ok(listXml.includes('<ETag>'+putTag+'</ETag>'),'ListObjectsV2 ETag mismatch');
+
+  // ListObjectsV2 must paginate logical entries, not underlying file paths:
+  // multiple files inside docs/ must never make docs/ recur on later pages.
+  for(const [destination,label] of [['misc/sub.txt','misc group'],['z.txt','top-level file']]){
+    const r=await s3(base,space+'/'+destination,'PUT',null,{
+      'x-amz-copy-source':'/'+space+'/docs/a.txt'});
+    check(r,200,'S3 CopyObject for '+label);await r.text();
+  }
+  const pageEntries=[];
+  let continuation='';
+  for(let page=0;page<5;page++){
+    const query=new URLSearchParams({'list-type':'2',delimiter:'/', 'max-keys':'1'});
+    if(continuation)query.set('continuation-token',continuation);
+    const r=await s3(base,space+'?'+query.toString());
+    check(r,200,'S3 ListObjectsV2 delimiter page '+(page+1));
+    const xml=await r.text();
+    const common=xml.match(/<CommonPrefixes><Prefix>([^<]+)<\/Prefix><\/CommonPrefixes>/)?.[1];
+    const fileKey=xml.match(/<Contents><Key>([^<]+)<\/Key>/)?.[1];
+    assert.ok(common||fileKey,'missing paginated entry: '+xml.slice(0,400));
+    pageEntries.push(common||fileKey);
+    continuation=xml.match(/<NextContinuationToken>([^<]+)<\/NextContinuationToken>/)?.[1]||'';
+    if(!continuation)break;
+  }
+  assert.deepEqual(pageEntries,['docs/','misc/','z.txt'],
+    'delimiter pages must not repeat folder prefixes or skip keys');
   await json(base,'/api/disk/gc',{method:'POST',token:writer,
     body:{confirm:false},expected:403});
   console.log(' PASS: grants, D1 directories, R2 S3 PUT/GET/Range/Copy/List/Multipart/Abort, privacy, share, static and move');
