@@ -149,6 +149,17 @@ function xmlResponse(text,status=200,headers={}) {
 function objectName(node,key) {
   return {key,size:node.size,mime:node.mime};
 }
+/**
+ * Stable opaque S3 entity tag for a specific physical object reference.
+ * An S3-created source has a unique ID which changes on overwrite.
+ * Existing ImgBed sources use the virtual node ID instead. The ETag is not
+ * advertised as a content MD5 (S3 multipart ETags are opaque too).
+ */
+export function objectEtag(node) {
+  const source=String(node.source_id||'');
+  const id=source.startsWith('disk-s3/') ? source.slice('disk-s3/'.length) : node.id;
+  return '"'+String(id).replace(/[^a-zA-Z0-9_-]/g,'')+'"';
+}
 async function upsertObjectNode(db,spaceId,parent,name,prior,sourceId,mime,size) {
   if(prior && prior.kind!=='file') throw new DiskError('NAME_CONFLICT',409);
   const now=Date.now();
@@ -206,7 +217,7 @@ async function listBucket(db,bucket,url) {
     if (returned>=max) break;
     if (group) {prefixes.add(group);last=item.key;returned++;continue;}
     contents+='<Contents><Key>'+xml(item.key)+'</Key><Size>'+item.node.size+'</Size><LastModified>'+
-      new Date(item.node.updated_at).toISOString()+'</LastModified><ETag>"'+xml(item.node.id)+'"</ETag></Contents>';
+      new Date(item.node.updated_at).toISOString()+'</LastModified><ETag>'+xml(objectEtag(item.node))+'</ETag></Contents>';
     last=item.key; returned++;
   }
   const more=items.some(x=>x.key>last) && returned>=max;
@@ -227,16 +238,24 @@ async function serveObject(context,node) {
     return s3Error('AccessDenied',403);
   }
   const type=node.mime || 'application/octet-stream';
+  const etag=objectEtag(node);
   const headers=new Headers({'Content-Type':type,'Accept-Ranges':'bytes','Cache-Control':'private, no-store',
+    'ETag':etag,
     'Content-Disposition':'inline; filename*=UTF-8\'\''+encodeURIComponent(node.name)});
   if (record.metadata?.Channel !== 'CloudflareR2') {
     // Serve bytes with the existing ImgBed reader instead of a redirect;
     // S3 SDKs should receive 200/206/HEAD responses directly.
-    return readSource(context,node.source_id,true);
+    const response=await readSource(context,node.source_id,true);
+    const responseHeaders=new Headers(response.headers);
+    responseHeaders.set('ETag',etag);
+    return new Response(response.body,{status:response.status,statusText:response.statusText,headers:responseHeaders});
   }
   const bucket=env.img_r2;
   if (!bucket) return s3Error('ServiceUnavailable',503);
-  const range=request.headers.get('Range');
+  // If-Range with a stale entity tag means return the full object, not 206.
+  let range=request.headers.get('Range');
+  const ifRange=request.headers.get('If-Range');
+  if(range && ifRange && ifRange!==etag)range=null;
   let options,begin,end;
   const size=Math.max(0,Number(node.size)||0);
   if (range) {
@@ -376,12 +395,12 @@ async function handleRequest(context) {
         // under sourceId. Never delete completed R2 bytes in this case.
         await registerS3Object(db,sourceId);
         await getDatabase(env).put(sourceId,'',{metadata});
-        await upsertObjectNode(db,bucket,parent,name,node,sourceId,mime,completed.size);
+        const nodeId=await upsertObjectNode(db,bucket,parent,name,node,sourceId,mime,completed.size);
         await clearMultipart(db,record);
         if(context.waitUntil) context.waitUntil(addFileToIndex(context,sourceId,metadata));
         return xmlResponse('<CompleteMultipartUploadResult><Location>'+xml(request.url.split('?')[0])+
-          '</Location><Bucket>'+xml(bucket)+'</Bucket><Key>'+xml(key)+'</Key><ETag>"'+
-          xml(completed.etag)+'"</ETag></CompleteMultipartUploadResult>');
+          '</Location><Bucket>'+xml(bucket)+'</Bucket><Key>'+xml(key)+'</Key><ETag>'+
+          xml(objectEtag({id:nodeId,source_id:sourceId}))+'</ETag></CompleteMultipartUploadResult>');
       }
       return s3Error('MethodNotAllowed',405);
     }
@@ -404,8 +423,9 @@ async function handleRequest(context) {
       if (source.kind!=='file') return s3Error('NoSuchKey',404);
       await ensureParents(db,bucket,parts.slice(0,-1));
       const now=Date.now(),parent=await resolve(db,bucket,dir);
-      await upsertObjectNode(db,bucket,parent,name,node,source.source_id,source.mime,source.size);
-      return xmlResponse('<CopyObjectResult><LastModified>'+new Date(now).toISOString()+'</LastModified></CopyObjectResult>');
+      const copiedId=await upsertObjectNode(db,bucket,parent,name,node,source.source_id,source.mime,source.size);
+      return xmlResponse('<CopyObjectResult><LastModified>'+new Date(now).toISOString()+
+        '</LastModified><ETag>'+xml(objectEtag({id:copiedId,source_id:source.source_id}))+'</ETag></CopyObjectResult>');
     }
     if (method==='PUT') {
       if (!env.img_r2) return s3Error('ServiceUnavailable',503,'R2 binding is required for S3 PutObject');
