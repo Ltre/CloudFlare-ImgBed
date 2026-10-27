@@ -18,7 +18,7 @@ jobs:
   regression:
     name: Regression checks (Node 22)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     env:
       WRANGLER_SEND_METRICS: 'false'
     steps:
@@ -48,3 +48,5 @@ jobs:
         run: |
           node deploy/worker/generate-routes.js
           npx --no-install wrangler deploy --config deploy/worker/wrangler.toml --dry-run --outdir data/ci-worker-build
+      - name: Run actual Wrangler local HTTP integration tests (Pages and Workers)
+        run: npm run test:wrangler:local
