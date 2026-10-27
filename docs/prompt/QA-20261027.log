@@ -622,3 +622,247 @@ npm test
 下一步需要在可安装依赖的环境执行 `npm test` 和 `npm run test:wrangler:local`，确认 Pages/Workers 两套真实 HTTP 测试结果。当前 GitHub Actions 仍没有运行记录，因此不能把这轮函数级验证算作完整验收。
 
 **当前进度：G1 本地验收中；G0 已完成，G2–G4 尚未开始。距离首次验收还差完整 npm 测试、Pages/Workers Wrangler 实测及失败项复测。是否可以验收：否。**
+
+
+问：
+
+    本地无法构建也无法测试
+
+附带终端日志（用户原文）：
+
+$ npm ci
+npm warn deprecated inflight@1.0.6: This module is not supported, and leaks memory. Do not use it. Check out lru-cache if you want a good and tested way to coalesce async requests by a key value, which is much more comprehensive and powerful.
+npm warn deprecated glob@7.1.6: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+npm warn deprecated @cloudflare/pages-plugin-sentry@1.1.4: Sentry now provides official support for Cloudflare Workers and Pages. Refer to the Sentry documentat
+ion (https://docs.sentry.io/platforms/javascript/guides/cloudflare/) for more de
+tails.
+npm warn deprecated prebuild-install@7.1.3: No longer maintained. Please contact
+ the author of the relevant native addon; alternatives are available.
+
+added 347 packages, and audited 351 packages in 8s
+
+51 packages are looking for funding
+  run `npm fund` for details
+
+9 vulnerabilities (1 low, 8 high)
+
+To address issues that do not require attention, run:
+  npm audit fix
+
+To address all issues (including breaking changes), run:
+  npm audit fix --force
+
+Run `npm audit` for details.
+npm warn install-scripts 4 packages had install scripts blocked because they are not covered by allowScripts:
+npm warn install-scripts   better-sqlite3@11.10.0 (install: prebuild-install || node-gyp rebuild --release)
+npm warn install-scripts   esbuild@0.28.2 (postinstall: node install.js)
+npm warn install-scripts   workerd@1.20260730.1 (postinstall: node install.js)
+npm warn install-scripts   workerd@1.20261023.1 (postinstall: node install.js)
+npm warn install-scripts
+npm warn install-scripts Run `npm install-scripts ls` to review, or `npm install
+-scripts approve <pkg>` to allow.
+
+FF@OrekiAcer MINGW64 /e/Workspaces/github/Ltre/CloudFlare-ImgBed (d2tunnel-disk)
+$ npm test
+npm notice run cloudflare-imgbed@2.7.8 test
+npm notice run node --import ./deploy/server/register.mjs ./node_modules/mocha/b
+in/mocha.js
+
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+Error [ERR_MODULE_NOT_FOUND]: Cannot find module 'E:\Workspaces\github\Ltre\CloudFlare-ImgBed\node_modules\mocha\bin\mocha.js' imported from E:\Workspaces\github\Ltre\CloudFlare-ImgBed\
+    at finalizeResolution (node:internal/modules/esm/resolve:271:11)
+    at moduleResolve (node:internal/modules/esm/resolve:865:10)
+    at defaultResolve (node:internal/modules/esm/resolve:992:11)
+    at nextResolve (node:internal/modules/esm/hooks:785:28)
+    at resolve (file:///E:/Workspaces/github/Ltre/CloudFlare-ImgBed/deploy/server/loader.mjs:52:12)
+    at nextResolve (node:internal/modules/esm/hooks:785:28)
+    at AsyncLoaderHooksOnLoaderHookWorker.resolve (node:internal/modules/esm/hooks:269:30)
+    at handleMessage (node:internal/modules/esm/worker:251:24)
+    at checkForMessages (node:internal/modules/esm/worker:193:28)
+    at process.<anonymous> (node:internal/modules/esm/worker:212:5) {
+  code: 'ERR_MODULE_NOT_FOUND',
+  url: 'file:///E:/Workspaces/github/Ltre/CloudFlare-ImgBed/node_modules/mocha/bin/mocha.js'
+}
+
+Node.js v24.17.0
+
+FF@OrekiAcer MINGW64 /e/Workspaces/github/Ltre/CloudFlare-ImgBed (d2tunnel-disk)
+$ node -v
+v24.17.0
+
+FF@OrekiAcer MINGW64 /e/Workspaces/github/Ltre/CloudFlare-ImgBed (d2tunnel-disk)
+$ npm audit fix
+
+up to date, audited 351 packages in 3s
+
+51 packages are looking for funding
+  run `npm fund` for details
+
+# npm audit report
+
+diff  5.0.0 - 5.2.1
+jsdiff has a Denial of Service vulnerability in parsePatch and applyPatch - http
+s://github.com/advisories/GHSA-73rr-hh4g-fpgx
+fix available via `npm audit fix`
+node_modules/diff
+  mocha  5.1.0 - 12.0.0-beta-2
+  Depends on vulnerable versions of diff
+  Depends on vulnerable versions of js-yaml
+  Depends on vulnerable versions of minimatch
+  Depends on vulnerable versions of nanoid
+  Depends on vulnerable versions of serialize-javascript
+  node_modules/mocha
+
+js-yaml  4.0.0 - 4.3.1
+Severity: high
+js-yaml has prototype pollution in merge (<<) - https://github.com/advisories/GHSA-mh29-5h37-fv8m
+JS-YAML: Quadratic-complexity DoS in merge key handling via repeated aliases - https://github.com/advisories/GHSA-h67p-54hq-rp68
+js-yaml: YAML merge-key chains can force quadratic CPU consumption - https://github.com/advisories/GHSA-52cp-r559-cp3m
+JS-YAML: Quadratic CPU consumption in !!omap resolution (3.x and 4.x) — CVE-2026
+-59870 fix not backported - https://github.com/advisories/GHSA-5p4m-2wfm-xmqj
+js-yaml: maxTotalMergeKeys does not limit CPU use for empty merge sources - http
+s://github.com/advisories/GHSA-2883-xcg3-v3hh
+fix available via `npm audit fix`
+node_modules/js-yaml
+
+minimatch  <=3.1.3
+Severity: high
+minimatch ReDoS vulnerability - https://github.com/advisories/GHSA-f8q6-p94x-37v3
+minimatch has a ReDoS via repeated wildcards with non-matching literal in pattern - https://github.com/advisories/GHSA-3ppc-4f35-3m26
+minimatch has ReDoS: matchOne() combinatorial backtracking via multiple non-adjacent GLOBSTAR segments - https://github.com/advisories/GHSA-7r86-cg39-jmmj
+minimatch ReDoS: nested *() extglobs generate catastrophically backtracking regu
+lar expressions - https://github.com/advisories/GHSA-23c5-xmqv-rm74
+fix available via `npm audit fix`
+node_modules/minimatch
+
+nanoid  <=3.3.17
+Severity: high
+Predictable results in nanoid generation when given non-integer values - https://github.com/advisories/GHSA-mwcw-c2x4-8c55
+Exposure of Sensitive Information to an Unauthorized Actor in nanoid - https://github.com/advisories/GHSA-qrpm-p2h7-hrv2
+nanoid: non-secure generators can loop indefinitely with negative size - https://github.com/advisories/GHSA-28wg-ghj8-5hjv
+nanoid: custom generators can loop indefinitely when size is zero - https://github.com/advisories/GHSA-2v37-7h3g-55p8
+nanoid: Integer Overflow or Wraparound - https://github.com/advisories/GHSA-xwg4-73v4-xw9w
+fix available via `npm audit fix`
+node_modules/nanoid
+
+serialize-javascript  <=7.1.2
+Severity: high
+Serialize JavaScript is Vulnerable to RCE via RegExp.flags and Date.prototype.toISOString() - https://github.com/advisories/GHSA-5c6j-r48x-rmvq
+Serialize JavaScript has CPU Exhaustion Denial of Service via crafted array-like objects - https://github.com/advisories/GHSA-qj8w-gfj5-8c6v
+Serialize JavaScript: Cross-site scripting (XSS) via unescaped </script at the e
+nd of a serialized function body - https://github.com/advisories/GHSA-m5mm-p8h7-m29v
+fix available via `npm audit fix`
+node_modules/serialize-javascript
+
+sharp  <=0.35.5-rc.1
+Severity: high
+sharp: Vulnerabilities in libheif: GHSA-g89c-p67h-r497 and GHSA-2jg2-4ch7-h545 -
+ https://github.com/advisories/GHSA-rgj7-g3m4-5g8c
+sharp : Vulnerability in librsvg dependency CVE-2026-96889 - https://github.com/
+advisories/GHSA-wq5f-xc86-pv6w
+fix available via `npm audit fix --force`
+Will install miniflare@4.20250508.2, which is a breaking change
+node_modules/miniflare/node_modules/sharp
+  miniflare  <=0.0.0-fec45ed61 || 4.20250508.3 - 5.20260908.0-alpha
+  Depends on vulnerable versions of sharp
+  Depends on vulnerable versions of undici
+  node_modules/miniflare
+
+undici  7.0.0 - 7.30.0
+Severity: high
+undici vulnerable to downstream response desynchronization via retry interceptor
+ - https://github.com/advisories/GHSA-8xcm-r25x-g524
+undici vulnerable to cross-user information disclosure and parse-time crash via
+degenerate private cache directives - https://github.com/advisories/GHSA-4cwx-7wf7-3272
+undici vulnerable to CRLF Injection via blob-like body 'type' property - https://github.com/advisories/GHSA-m8rv-5g2x-5cg5
+undici vulnerable to cross-user information disclosure via whitespace around equals in Cache-Control directives - https://github.com/advisories/GHSA-jr45-8vmc-q
+m54
+undici vulnerable to cookie attribute injection via unsanitized domain and unpar
+sed setCookie fields - https://github.com/advisories/GHSA-v3r7-h72x-cjcm
+undici vulnerable to Denial of Service via unhandled error in WebSocket permessa
+ge-deflate decompression - https://github.com/advisories/GHSA-3wwx-pv8p-q78v
+undici vulnerable to Denial of Service via orphaned RetryHandler response body -
+ https://github.com/advisories/GHSA-pmjh-fq2x-6v4x
+undici vulnerable to downstream response splitting via retry interceptor - https://github.com/advisories/GHSA-r53p-7pc4-xj5r
+undici vulnerable to Denial of Service via unrequested WebSocket subprotocol - https://github.com/advisories/GHSA-rfgv-xxqx-mfg5
+undici vulnerable to Denial of Service via unbounded decompression of compressed responses - https://github.com/advisories/GHSA-3xpg-4rpp-hhhm
+undici vulnerable to cross-user cookie disclosure via Set-Cookie caching in shared caches - https://github.com/advisories/GHSA-2jfj-6hjv-fm6j
+undici vulnerable to response truncation via oversized chunked responses in the dump interceptor - https://github.com/advisories/GHSA-2gqq-gqf2-x968
+undici vulnerable to TLS certificate validation bypass via dropped connect options in BalancedPool - https://github.com/advisories/GHSA-w293-vg96-wgc3
+undici vulnerable to caching and replay of unsafe HTTP method responses - https:
+//github.com/advisories/GHSA-8436-99hf-9mmv
+undici vulnerable to Denial of Service via WebSocketStream unclean close - https
+://github.com/advisories/GHSA-rx4f-c7p8-82vq
+undici vulnerable to Denial of Service via unbounded memory in the EventSource parser - https://github.com/advisories/GHSA-4qv8-2p9j-2685
+undici vulnerable to Subresource Integrity bypass via non-lowercase algorithm to
+kens - https://github.com/advisories/GHSA-f72v-6w45-q472
+undici vulnerable to Denial of Service via unhandled error on excessive content-encodings - https://github.com/advisories/GHSA-xjj6-f33q-929c
+fix available via `npm audit fix --force`
+Will install miniflare@4.20250508.2, which is a breaking change
+node_modules/undici
+
+9 vulnerabilities (1 low, 8 high)
+
+To address issues that do not require attention, run:
+  npm audit fix
+
+To address all issues (including breaking changes), run:
+  npm audit fix --force
+npm warn install-scripts 4 packages had install scripts blocked because they are not covered by allowScripts:
+npm warn install-scripts   better-sqlite3@11.10.0 (install: node-gyp rebuild)
+npm warn install-scripts   esbuild@0.28.2 (postinstall: node install.js)
+npm warn install-scripts   workerd@1.20260730.1 (postinstall: node install.js)
+npm warn install-scripts   workerd@1.20261023.1 (postinstall: node install.js)
+npm warn install-scripts
+npm warn install-scripts Run `npm install-scripts ls` to review, or `npm install-scripts approve <pkg>` to allow.
+
+FF@OrekiAcer MINGW64 /e/Workspaces/github/Ltre/CloudFlare-ImgBed (d2tunnel-disk)
+
+答：
+
+日志里有两个独立的阻塞点：`npm ci` 虽然安装完成，但拦截了 `better-sqlite3`、`esbuild` 和 `workerd` 的安装脚本；随后 `npm test` 又因为我上次写错了 Mocha 的启动文件路径而直接失败。
+
+我先修正仓库里的测试命令，再检查构建所需的原生依赖和安装脚本配置，尽量让 Windows 本地可以正常测试和构建。最后会提交代码、追加日志，并明确说明验收状态。
+
+进一步核对了 `package-lock.json`：项目锁定的 Mocha 8.1.3 实际入口是 **`bin/mocha`**，不是我之前写的 `bin/mocha.js`。这个错误是我上次修改引入的，必须更正。
+
+另外，日志中的安装脚本拦截符合新版 npm 的安全机制。我会在仓库里只批准这次构建所需、且已在锁文件或你的日志中出现过的具体版本，避免让所有依赖的安装脚本无条件执行。
+
+已经提交两项修复：改正 Mocha 8 的启动入口，并在 `package.json` 中加入针对当前依赖版本的安装脚本许可。
+
+我还加了 `npm run doctor:local`，它会实际检查 Mocha 入口、`better-sqlite3`、`esbuild` 和 `workerd`，便于区分“包已下载”和“原生组件真的可运行”。接下来补上统一的本地构建与验证命令，避免你误执行生产部署。
+
+已经把你日志中能确认的两个阻塞问题修复并推送到了 `d2tunnel-disk`。
+
+**修复内容：**
+
+1. 将 `npm test` 的启动文件从错误的 `bin/mocha.js` 改为锁文件实际声明的 `bin/mocha`，保留 ESM 兼容加载器。
+2. 为 `better-sqlite3`、`esbuild`、`workerd` 配置了指定版本的安装脚本许可，适配新版 npm 的安全限制。
+3. 新增 `doctor:local`、`build:local`、`verify:local` 命令，分别负责依赖检查、本地 Pages/Workers 构建和完整 G1 验证。构建命令使用 `--dry-run`，不会部署到 Cloudflare。
+4. 增加测试，检查 Mocha 启动路径及安装脚本许可，防止同类问题再次引入。
+
+请更新代码后重新安装依赖：
+
+```bash
+git pull origin d2tunnel-disk
+npm ci
+npm run doctor:local
+npm test
+npm run build:local
+```
+
+如果上述步骤通过，再运行 `npm run test:wrangler:local`。也可以使用 `npm run verify:local` 一次执行完整验证流程。
+
+**建议优先使用 Node.js 22 LTS**，与项目现有 CI 基线保持一致。你当前的 Node.js 24.17.0 不一定有兼容问题，但若 `better-sqlite3` 编译或加载失败，先在 Node 22 下复测。
+
+你日志中的 9 项安全告警与本次 Mocha 启动错误是两回事。目前不要执行 `npm audit fix --force`，因为日志已经显示它可能引入 Miniflare 的破坏性版本变化。
+
+本轮全部修改已提交 GitHub 并核实文件存在；你的终端原始日志、问题分析与修复过程也已追加到 `docs/prompt/QA-20261027.log` 和 `docs/log/dev-20261027.md`。
+
+本轮仅完成仓库内容、依赖锁文件与脚本配置的静态检查，确认 Mocha CLI 路径匹配锁文件、三类原生依赖的锁定版本均已有许可。**尚未在你的 Windows 本机执行修复后的 `npm ci`、`npm test` 或 Wrangler 构建**，所以是否完全解决，需要以你下一次实跑日志为准。
+
+[本轮代码](https://github.com/Ltre/CloudFlare-ImgBed/tree/d2tunnel-disk) · [开发日志](https://github.com/Ltre/CloudFlare-ImgBed/blob/d2tunnel-disk/docs/log/dev-20261027.md)
+
+**当前进度：G1 本地验收阻塞修复中；G0 已完成，G2–G4 尚未开始。距离可验收仍差本机依赖预检、Mocha 全部测试、Pages/Workers 构建和真实 HTTP 回归通过。现在是否可以验收：否。**

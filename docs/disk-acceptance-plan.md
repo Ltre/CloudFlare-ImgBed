@@ -92,3 +92,12 @@ npm run test:wrangler:local
 - 增加 `test/s3-list-pagination.test.js` 单元回归和 `scripts/wrangler-disk-smoke.mjs` 跨页真实 HTTP 断言，预期 `docs/`、`misc/`、`z.txt` 各出现一次。
 - 已直接执行实际 `listBucket`/目录构造代码，V1/V2、前缀、start-after、非法上限的函数级验证通过。
 - 尚无 `npm test`、Wrangler Pages/Workers 实际成功证据；GitHub Actions 尚无运行记录。**G1 不能通过，G2 不能开始。**
+
+ 
+### G1 · 2026-10-27 用户 Windows npm 安装脚本及 Mocha CLI 阻塞
+
+- 真实用户日志：Node v24.17.0，`npm ci` 实际安装 347 个包但阻止 better-sqlite3/esbuild/workerd 原生安装脚本，`npm test` 在启动时因错误 `node_modules/mocha/bin/mocha.js` 返回 ERR_MODULE_NOT_FOUND；上传日志没有实际构建失败堆栈。
+- 修复：`package.json` 使用锁文件 Mocha 8.1.3 的真实入口 `bin/mocha`；为用户环境及仓库锁文件出现的原生依赖版本配置 pinned `allowScripts`，不放开所有 npm install scripts。
+- 新增：`npm run doctor:local`（验证原生依赖实际可执行）、`npm run build:local`（Pages build + Workers dry-run）、`npm run verify:local`（从环境检查直到双模式 Wrangler HTTP 的完整 G1 流程）和 `test/local-toolchain.test.js`。
+- 静态检查：Mocha CLI 与 lockfile bin 一致；锁定的原生依赖版本获准；构建命令包含 --dry-run。**未在用户本机执行重新安装、Mocha 或 Wrangler，G1 尚未完成**。
+- Windows 推荐 Node 22 LTS 与 GitHub Actions 基线一致；不要使用 `npm audit fix --force` 强行降级 Miniflare。9 个审计告警保留后续独立治理。
