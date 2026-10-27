@@ -168,6 +168,38 @@ async function smoke(base,space,writer,reader){
   const aborted=await s3(base,space+'/docs/aborted.bin?uploadId='+encodeURIComponent(abortId),'DELETE');
   check(aborted,204,'S3 AbortMultipartUpload');
 
+
+  // Regression: the original ImgBed R2 uploader still works, and its optional
+  // diskSpace/diskPath hook attaches the same physical file to the virtual disk.
+  const form=new FormData();
+  form.set('file',new Blob(['imgbed upload integration'],{type:'text/plain'}),'imgbed-native.txt');
+  const upload=await fetch(base+'/upload?uploadChannel=cfr2&diskSpace='+space+'&diskPath=docs',{
+    method:'POST',headers:{'X-Disk-Token':writer},body:form
+  });
+  check(upload,200,'original ImgBed upload through R2');
+  const uploadData=await upload.json();
+  assert.match(String(uploadData[0]?.src||''),/\/file\//);
+  let integrated=false;
+  for(let i=0;i<25;i++){
+    const folder=await json(base,'/api/disk/browse'+query+'&path=docs',{token:reader});
+    if(folder.entries.some(e=>e.name==='imgbed-native.txt')){integrated=true;break;}
+    await pause(200);
+  }
+  assert.equal(integrated,true,'ImgBed uploaded object must become a disk reference');
+
+  // Public ImgBed upload permission must never imply virtual disk write.
+  const unauthForm=new FormData();
+  unauthForm.set('file',new Blob(['no scoped write key'],{type:'text/plain'}),'not-attached.txt');
+  const publicUpload=await fetch(base+'/upload?uploadChannel=cfr2&diskSpace='+space+'&diskPath=docs',{
+    method:'POST',body:unauthForm
+  });
+  check(publicUpload,200,'ImgBed standard public upload');
+  await publicUpload.text();
+  await pause(500);
+  const after=await json(base,'/api/disk/browse'+query+'&path=docs',{token:reader});
+  assert.equal(after.entries.some(e=>e.name==='not-attached.txt'),false,
+    'ImgBed public upload must not create unauthorized disk references');
+
   const list=await s3(base,space+'?list-type=2');
   check(list,200,'S3 ListObjectsV2');assert.match(await list.text(),/a\.txt/);
   await json(base,'/api/disk/gc',{method:'POST',token:writer,
