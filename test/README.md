@@ -41,6 +41,7 @@ The current Mocha entry point automatically loads `.js` test files directly insi
 | Image processing | [imageProcessing.test.js](imageProcessing.test.js) | `functions/file/imageTransform.js` | Parameter validation, processor format support, historical generic types, original-image fallback, input formats and output headers |
 | AI tags | [ai.test.js](ai.test.js) | `api/manage/ai/tags.js` | Original formats, preview-type normalization, signatures and size limits; AI invocation only for valid input |
 | Shared file-type rules | [fileTypes.test.js](fileTypes.test.js) | `utils/mimeTypes.js` | MIME normalization, case-sensitive parameters, explicit-type precedence, extension inference, unknown/ambiguous extensions and random-image keywords versus strict classification |
+| Capability browse privacy | [disk-api-privacy.test.js](disk-api-privacy.test.js) | `functions/api/disk/[[path]].js` | Collaborator source-ID redaction while retaining administrator visibility |
 | S3 storage GC | [disk-gc.test.js](disk-gc.test.js) | `functions/utils/disk/gc.js` and D1 triggers | 24-hour grace, reference safety, dry run, bounded reclamation, concurrent copy guard |
 | S3 bulk delete | [s3-delete.test.js](s3-delete.test.js) | `functions/s3/[[path]].js` | DeleteObjects XML parser, entity decoding and malformed request rejection |
 | S3 private reads | [disk-private-s3.test.js](disk-private-s3.test.js) | `functions/utils/disk/read.js` | Private R2 content, byte ranges and HEAD without exposing public ImgBed source |
