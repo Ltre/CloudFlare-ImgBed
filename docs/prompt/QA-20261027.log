@@ -509,3 +509,73 @@ Range 读取和烟雾测试的状态码修复已提交。接下来补一组**不
 要推进正式验收，下一项需要在有依赖的环境运行 `npm ci && npm test && npm run test:wrangler:local`，取得 Pages/Workers 两套真实 HTTP 日志。仓库的 `Regression tests` 工作流也可从 GitHub Actions 页面手动运行，选择 `d2tunnel-disk` 分支。目前查询仍是 0 条运行记录。
 
 **当前进度：G1 本地验收阶段，尚未通过。距离首次验收还差 G1 的真实测试全绿及阻塞缺陷复测；距离完整功能验收还差 G1、G2、G3 三关。现在是否可以验收：否。**
+
+
+问：
+
+$ npm test
+npm notice run cloudflare-imgbed@2.7.8 test
+npm notice run mocha
+
+Error [ERR_MODULE_NOT_FOUND]: Cannot find module 'E:\Workspaces\github\Ltre\CloudFlare-ImgBed\functions\utils\sysConfig' imported from E:\Workspaces\github\Ltre
+\CloudFlare-ImgBed\functions\file\[[path]].js
+    at finalizeResolution (node:internal/modules/esm/resolve:271:11)
+    at moduleResolve (node:internal/modules/esm/resolve:865:10)
+    at defaultResolve (node:internal/modules/esm/resolve:992:11)
+    at #cachedDefaultResolve (node:internal/modules/esm/loader:691:20)
+    at #resolveAndMaybeBlockOnLoaderThread (node:internal/modules/esm/loader:708:38)
+    at ModuleLoader.resolveSync (node:internal/modules/esm/loader:740:52)
+    at ModuleLoader.getOrCreateModuleJob (node:internal/modules/esm/loader:590:27)
+    at ModuleJobSync.syncLink (node:internal/modules/esm/module_job:163:33)
+    at ModuleJobSync.link (node:internal/modules/esm/module_job:489:17)
+    at new ModuleJobSync (node:internal/modules/esm/module_job:479:26)
+    at #getOrCreateModuleJobAfterResolve (node:internal/modules/esm/loader:562:11)
+    at afterResolve (node:internal/modules/esm/loader:597:52)
+    at ModuleLoader.getOrCreateModuleJob (node:internal/modules/esm/loader:603:12)
+    at ModuleJobSync.syncLink (node:internal/modules/esm/module_job:163:33)
+    at ModuleJobSync.link (node:internal/modules/esm/module_job:489:17)
+    at new ModuleJobSync (node:internal/modules/esm/module_job:479:26)
+    at #getOrCreateModuleJobAfterResolve (node:internal/modules/esm/loader:562:11)
+    at ModuleJobSync.syncLink (node:internal/modules/esm/module_job:163:33)
+    at ModuleJobSync.link (node:internal/modules/esm/module_job:479:26)
+    at ModuleLoader.importSyncForRequire (node:internal/modules/esm/loader:346:11)
+    at loadESMFromCJS (node:internal/modules/cjs/loader:1673:24)
+    at Module._compile (node:internal/modules/cjs/loader:1836:5)
+    at Object..js (node:internal/modules/cjs/loader:1985:10)
+    at Module.load (node:internal/modules/cjs/loader:1577:32)
+    at Module._load (node:internal/modules/cjs/loader:1379:12)
+    at TracingChannel.traceSync (node:diagnostics_channel:328:14)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+    at Module.require (node:internal/modules/cjs/loader:1600:12)
+    at require (node:internal/modules/helpers:153:16)
+    at exports.requireOrImport (E:\Workspaces\github\Ltre\CloudFlare-ImgBed\node_modules\mocha\lib\esm-utils.js:42:12)
+    at exports.loadFilesAsync (E:\Workspaces\github\Ltre\CloudFlare-ImgBed\node_modules\mocha\lib\esm-utils.js:55:34)
+    at async singleRun (E:\Workspaces\github\Ltre\CloudFlare-ImgBed\node_modules\mocha\lib\cli\run-helpers.js:125:3)
+    at async exports.handler (E:\Workspaces\github\Ltre\CloudFlare-ImgBed\node_modules\mocha\lib\cli\run.js:362:5)
+
+答：
+
+报错指向一个明确的 Node.js ESM 兼容问题：`functions/file/[[path]].js` 引用了不带 `.js` 后缀的 `../utils/sysConfig`。Cloudflare 构建工具可能会解析这种导入，但直接运行 Mocha 时，Node.js 不会自动补全扩展名。
+
+我会检查这次测试实际触达的模块依赖，修复同类导入问题，而不是只改报错的第一行。修改后提交到 `d2tunnel-disk`，追加当天日志，并给你准确的下一步验证命令。
+
+已确认仓库里其实有现成的 ESM 兼容加载器：`deploy/server/register.mjs` 和 `loader.mjs`。它们能为本地 Node.js 补全相对导入的 `.js` 扩展名。
+
+因此，这次优先修复 **`npm test` 的启动方式**，让 Mocha 与现有 `test:server` 使用同一套模块解析规则。不需要为了测试而大规模修改 Cloudflare 生产代码中的导入路径。
+
+修复已推送：`npm test` 现在会先加载项目自带的 ESM 解析器，再启动 Mocha。
+
+我在本地 Node.js 22 上做了最小复现：相同的无扩展名导入，在普通启动下失败；注册加载器后成功。**这验证了修复机制，但还不是项目完整测试通过。** 接下来我会保存本次错误报告、修改说明和验证结果，并核对最终提交。
+
+根因已定位：普通 `mocha` 启动没有注册本仓库已有的 Node.js ESM 加载器，因此 Node 22 对 `functions/file/[[path]].js` 中 `../utils/sysConfig` 等省略 `.js` 的相对导入返回 `ERR_MODULE_NOT_FOUND`。我将 `package.json` 的 `test` 改为 `node --import ./deploy/server/register.mjs ./node_modules/mocha/bin/mocha.js`，复用 `test:server` 已经采用的 `deploy/server/loader.mjs`。修复不改 Cloudflare 业务模块，也不需要把所有源代码导入改成 `.js`。
+
+已推送提交 `3418e52cd4949a76834e67317992a8a4600a8bc1`。在本地 Node.js 22 使用等效的扩展名解析器做了真实进程验证：未注册时退出码为 1；注册后成功导入并输出 `esm-fixed`。这只证明加载器机制有效，尚未在安装完整依赖的项目上完成 `npm test`。
+
+请在开发机更新分支后执行：
+```powershell
+git pull origin d2tunnel-disk
+npm test
+```
+如果出现下一个错误，请提供新的首个失败用例或完整错误，继续按 G1 阻塞缺陷清单修复。
+
+**当前进度：G1 本地验收阶段，Node.js ESM 模块解析阻塞已修复并提交，等待本机 npm test 结果及 Wrangler Pages/Workers 实测。现在是否可以验收：否。**
