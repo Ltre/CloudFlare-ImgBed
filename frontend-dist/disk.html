@@ -74,6 +74,22 @@ function button(label,fn,cls='') {const b=el('button',label,cls);b.addEventListe
 function makePath(name) {return state.path?[state.path,name].join('/'):name;}
 function size(bytes) {return bytes>=1073741824?(bytes/1073741824).toFixed(2)+' GiB':bytes>=1048576?(bytes/1048576).toFixed(2)+' MiB':bytes>=1024?(bytes/1024).toFixed(1)+' KiB':bytes+' B';}
 const err = e => status(e.message||String(e),true);
+// The roles are per space. A read grant can copy out to a second space
+// only when the same request also carries a write grant for that target.
+function canWrite(spaceId=state.space) {
+  if(!spaceId)return false;
+  return !state.key || state.spaces.some(s=>s.id===spaceId && s.role==='write');
+}
+function updatePermissions() {
+  state.role=!state.key?'admin':(canWrite()?'write':'read');
+  $('#role').textContent=state.key
+    ?('协同访问 · '+(state.role==='write'?'可编辑':'只读'))
+    :'管理员视图';
+  for(const id of ['addSpace','renameSpace','deleteSpace','grant','grants','gc'])
+    $('#'+id).hidden=!!state.key;
+  for(const id of ['folder','attach','shareFolder','upload','uploadChannel','shares'])
+    $('#'+id).disabled=!canWrite();
+}
 async function refreshSpaces() {
   const data=await api('spaces');
   state.spaces=data.spaces;
@@ -81,10 +97,7 @@ async function refreshSpaces() {
   for(const s of state.spaces){const opt=el('option',s.name+' · '+s.id.slice(0,8));opt.value=s.id;picker.append(opt);}
   if(!state.spaces.some(s=>s.id===state.space))state.space=state.spaces[0]?.id||'';
   picker.value=state.space;
-  state.role=state.key?(state.spaces.find(s=>s.id===state.space)?.role||'read'):'admin';
-  $('#role').textContent=state.key?('协同访问 · '+(state.role==='write'?'可编辑':'只读')):'管理员视图';
-  for(const id of ['addSpace','renameSpace','deleteSpace','grant','grants','gc'])$('#'+id).hidden=!!state.key;
-  for(const id of ['folder','attach','shareFolder','upload','uploadChannel'])$('#'+id).disabled=state.role==='read';
+  updatePermissions();
   if(state.space) await browse(); else {state.entries=[];$('#entries').replaceChildren();$('#breadcrumb').replaceChildren();}
 }
 async function browse(path=state.path) {
@@ -103,9 +116,11 @@ async function browse(path=state.path) {
     info.textContent=file?size(n.size)+' · '+(n.mime||'文件'):'目录';
     pub.textContent=file?(n.is_public?'已公开':'私有'):'—';
     if(file)actions.append(button('预览',()=>preview(n,path)));
-    if(state.role!=='read'){
-      if(file)actions.append(button('静态',()=>togglePublic(n,path)));
+    // Source read access is sufficient to copy into any writable target.
+    if(state.spaces.some(s=>canWrite(s.id)))
       actions.append(button('复制',()=>transfer(n,path,'copy')));
+    if(canWrite()){
+      if(file)actions.append(button('静态',()=>togglePublic(n,path)));
       actions.append(button('移动',()=>transfer(n,path,'move')));
       actions.append(button('重命名',()=>rename(n,path)));
       actions.append(button('分享',()=>share(path)));
@@ -121,10 +136,14 @@ async function rename(n,path) {
   try{await api('rename','POST',{space:state.space,path,name});await browse();}catch(e){err(e);}
 }
 async function transfer(n,path,operation) {
-  const choices=state.spaces.map((s,i)=>String(i+1)+'. '+s.name+' ('+s.id+')').join('\n');
-  const selected=prompt('目标分区：输入编号\n'+choices,String(state.spaces.findIndex(s=>s.id===state.space)+1));
+  if(operation==='move' && !canWrite()){status('源分区没有移动权限',true);return;}
+  const destinations=state.spaces.filter(s=>canWrite(s.id));
+  if(!destinations.length){status('没有可写的目标分区',true);return;}
+  const choices=destinations.map((s,i)=>String(i+1)+'. '+s.name+' ('+s.id+')').join('\n');
+  const suggested=Math.max(0,destinations.findIndex(s=>s.id===state.space))+1;
+  const selected=prompt('可写目标分区：输入编号\n'+choices,String(suggested));
   if(selected===null)return;
-  const space=state.spaces[Number(selected)-1];if(!space){status('无效分区',true);return;}
+  const space=destinations[Number(selected)-1];if(!space){status('无效分区',true);return;}
   const destinationPath=prompt('目标文件夹路径（留空表示根目录）','');if(destinationPath===null)return;
   const name=prompt('复制/移动后的名称',n.name);if(name===null)return;
   try {
@@ -180,7 +199,11 @@ async function preview(n,path) {
   }catch(e){err(e);}
 }
 $('#closeViewer').onclick=()=>{$('#viewer').close();$('#media').replaceChildren();};
-$('#space').onchange=e=>{state.space=e.target.value;state.path='';browse().catch(err);};
+$('#space').onchange=e=>{
+  state.space=e.target.value;state.path='';
+  updatePermissions();
+  browse().catch(err);
+};
 $('#refresh').onclick=()=>refreshSpaces().catch(err);
 $('#back').onclick=()=>browse(state.path.split('/').slice(0,-1).join('/')).catch(err);
 $('#folder').onclick=async()=>{const name=prompt('文件夹名称');if(name===null)return;try{await api('mkdir','POST',{space:state.space,path:state.path,name});await browse();}catch(e){err(e);}};
