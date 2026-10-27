@@ -18,7 +18,7 @@ describe('S3 Multipart Upload',()=>{
  };
  beforeEach(async()=>{
    uploads=new Map();aborted=new Set();db=new SqliteD1(':memory:');
-   for(const name of ['v2.8.0_disk.sql','v2.8.1_disk_s3_multipart.sql'])db.exec(readFileSync(new URL('../database/migrations/'+name,import.meta.url),'utf8'));
+   for(const name of ['v2.8.0_disk.sql','v2.8.1_disk_s3_multipart.sql','v2.8.2_disk_gc.sql','v2.8.3_disk_gc_recovery.sql'])db.exec(readFileSync(new URL('../database/migrations/'+name,import.meta.url),'utf8'));
    space=await createSpace(db,'disk');
  });
  afterEach(()=>db.db.close());

@@ -10,11 +10,12 @@ The original ImgBed uploader is unchanged. Upload an object through ImgBed, then
 ## Cloudflare Pages deployment
 
 1. Bind a Cloudflare D1 database under the **binding name img_d1** (Pages project → Settings → Bindings → D1). This is required by the virtual disk metadata model. Existing ImgBed KV metadata can remain in the existing img_url KV binding; there is no migration of old ImgBed file records.
-2. Apply all three migrations to this binding (once, in order):
+2. Apply all four migrations to this binding (once, in order):
 
     npx wrangler d1 execute YOUR_D1_DATABASE_NAME --remote --file=database/migrations/v2.8.0_disk.sql
     npx wrangler d1 execute YOUR_D1_DATABASE_NAME --remote --file=database/migrations/v2.8.1_disk_s3_multipart.sql
     npx wrangler d1 execute YOUR_D1_DATABASE_NAME --remote --file=database/migrations/v2.8.2_disk_gc.sql
+    npx wrangler d1 execute YOUR_D1_DATABASE_NAME --remote --file=database/migrations/v2.8.3_disk_gc_recovery.sql
 
     For a new ImgBed D1 setup, also initialize the original schema from database/init.sql. Do not drop or reset an existing database.
 3. Optionally bind R2 storage as **img_r2** (needed to use S3 PutObject; R2-backed ImgBed files also use the original img_r2 binding).
@@ -98,7 +99,7 @@ The repository's regression workflow now runs for pushes to d2tunnel-disk as wel
 
 ## S3 multipart and existing uploader integration
 
-The S3 gateway now implements CreateMultipartUpload, UploadPart, ListParts, CompleteMultipartUpload, AbortMultipartUpload and ListMultipartUploads through Cloudflare R2 and D1. Apply all three disk migrations, including v2.8.1 and v2.8.2. Incomplete uploads should be aborted; outstanding R2 upload manifests currently require explicit cleanup.
+The S3 gateway now implements CreateMultipartUpload, UploadPart, ListParts, CompleteMultipartUpload, AbortMultipartUpload and ListMultipartUploads through Cloudflare R2 and D1. Apply all four disk migrations, including v2.8.1 and v2.8.2. Incomplete uploads should be aborted; outstanding R2 upload manifests currently require explicit cleanup.
 
 The disk page's direct upload button reuses ImgBed's existing /upload endpoint, then associates its returned ID with the chosen directory. For the original ImgBed uploader, optionally add diskSpace=PARTITION_UUID, diskPath=folder/subfolder and diskName=filename to the upload/final merge URL. The endUpload hook checks disk write authorization independently and adds the reference asynchronously. This does not grant virtual disk writes to public upload users. Large files should continue using the original ImgBed chunked upload flow.
 
@@ -130,7 +131,7 @@ npm run test:wrangler:pages
 npm run test:wrangler:workers
 ```
 
-The smoke script `scripts/wrangler-disk-smoke.mjs` creates an isolated temporary state directory **for each deployment mode**, invokes real `wrangler d1 execute ... --local` for all three disk migrations, seeds one partition and read/write capability grants, launches `wrangler pages dev` or `wrangler dev`, then makes actual HTTP requests. Checks include S3 AWS SigV4 authentication, R2 upload/download/byte range, copy, KV metadata, D1 directories, scoped collaborator permissions, hiding internal source IDs, opt-in static file access and expiring file sharing. It automatically cleans up temporary local state and doesn't require a Cloudflare login or production resources.
+The smoke script `scripts/wrangler-disk-smoke.mjs` creates an isolated temporary state directory **for each deployment mode**, invokes real `wrangler d1 execute ... --local` for all four disk migrations, seeds one partition and read/write capability grants, launches `wrangler pages dev` or `wrangler dev`, then makes actual HTTP requests. Checks include S3 AWS SigV4 authentication, R2 upload/download/byte range, copy, KV metadata, D1 directories, scoped collaborator permissions, hiding internal source IDs, opt-in static file access and expiring file sharing. It automatically cleans up temporary local state and doesn't require a Cloudflare login or production resources.
 
 Use `wrangler.disk-local.jsonc` for Pages, `deploy/worker/wrangler.disk-local.jsonc` for Workers; both contain **fixed test-only S3 credentials**. Do not deploy these two configurations or reuse their credentials in production.
 
@@ -140,6 +141,7 @@ To develop interactively with persistent local bindings, initialize the local D1
 npx --no-install wrangler d1 execute img_d1 --local --config wrangler.disk-local.jsonc --persist-to .wrangler/disk-dev-state --file database/migrations/v2.8.0_disk.sql
 npx --no-install wrangler d1 execute img_d1 --local --config wrangler.disk-local.jsonc --persist-to .wrangler/disk-dev-state --file database/migrations/v2.8.1_disk_s3_multipart.sql
 npx --no-install wrangler d1 execute img_d1 --local --config wrangler.disk-local.jsonc --persist-to .wrangler/disk-dev-state --file database/migrations/v2.8.2_disk_gc.sql
+npx --no-install wrangler d1 execute img_d1 --local --config wrangler.disk-local.jsonc --persist-to .wrangler/disk-dev-state --file database/migrations/v2.8.3_disk_gc_recovery.sql
 npm run dev:disk:pages
 # Alternatively use the same migrations with --config deploy/worker/wrangler.disk-local.jsonc
 # and run:
@@ -153,3 +155,7 @@ GitHub Actions additionally runs this HTTP suite after unit tests and Pages/Work
 ### Wrangler Pages configuration filename
 
 Wrangler Pages **does not accept arbitrary `pages dev --config <filename>` values**. The test runner temporarily copies `wrangler.disk-local.jsonc` to root `wrangler.jsonc`, refusing to overwrite any existing file, and removes it after testing. The `npm run dev:disk:pages` command uses a protective wrapper with the same behavior. Both local D1 migrations and the server use the same local persistence directory. `preview_database_id` is set to the local Pages binding name `img_d1`.
+
+### Crash-safe garbage collection (v2.8.3)
+
+A new `gc_claimed_at` lease records the exact time an unreferenced object is claimed for deletion. A storage/network failure **does not** return the source to active, because R2 may have removed its bytes. After 10 minutes the collector can retry idempotently while D1 triggers prevent new file references to the deleting object. Sources belonging to active multipart uploads are excluded. New multipart sessions register their R2 object ID before final completion; abandoning/aborting a session removes the registry row.

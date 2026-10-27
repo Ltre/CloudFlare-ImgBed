@@ -228,7 +228,7 @@ async function once(mode){
       installedPagesConfig=true;
     }
     console.log('Wrangler '+mode+' local test...');
-    for(const file of ['v2.8.0_disk.sql','v2.8.1_disk_s3_multipart.sql','v2.8.2_disk_gc.sql'])
+    for(const file of ['v2.8.0_disk.sql','v2.8.1_disk_s3_multipart.sql','v2.8.2_disk_gc.sql','v2.8.3_disk_gc_recovery.sql'])
       await command(['d1','execute','img_d1','--local','--config',config,
         '--persist-to',store,'--file',join(root,'database/migrations',file)]);
     const space=randomUUID(),writer=randomBytes(32).toString('hex'),
