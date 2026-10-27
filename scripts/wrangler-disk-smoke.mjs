@@ -131,11 +131,48 @@ async function smoke(base,space,writer,reader){
   const rootView=await json(base,'/api/disk/browse'+query,{token:reader});
   assert.ok(rootView.entries.some(e=>e.name==='moved.txt'));
 
+
+  // Real Cloudflare R2 multipart operations; non-final part >= 5 MiB.
+  const largePath=space+'/docs/multipart.bin';
+  const initiate=await s3(base,largePath+'?uploads','POST',null,
+    {'Content-Type':'application/octet-stream'});
+  check(initiate,200,'S3 CreateMultipartUpload');
+  const uploadXml=await initiate.text();
+  const uploadId=uploadXml.match(/<UploadId>([^<]+)<\/UploadId>/)?.[1];
+  assert.ok(uploadId,'missing UploadId: '+uploadXml.slice(0,600));
+  const chunk1=Buffer.alloc(5*1024*1024,65),chunk2=Buffer.from('DONE');
+  const uploadPart=async(n,bytes)=>{
+    const r=await s3(base,largePath+'?partNumber='+n+'&uploadId='+encodeURIComponent(uploadId),
+      'PUT',bytes,{'Content-Length':String(bytes.length)});
+    check(r,200,'S3 UploadPart '+n);
+    const etag=r.headers.get('ETag');assert.ok(etag,'missing part ETag');await r.arrayBuffer();
+    return etag;
+  };
+  const tag1=await uploadPart(1,chunk1),tag2=await uploadPart(2,chunk2);
+  const parts=await s3(base,largePath+'?uploadId='+encodeURIComponent(uploadId));
+  check(parts,200,'S3 ListParts');
+  assert.match(await parts.text(),/<PartNumber>2<\/PartNumber>/);
+  const xml='<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>'+tag1+
+    '</ETag></Part><Part><PartNumber>2</PartNumber><ETag>'+tag2+
+    '</ETag></Part></CompleteMultipartUpload>';
+  const completed=await s3(base,largePath+'?uploadId='+encodeURIComponent(uploadId),
+    'POST',xml,{'Content-Type':'application/xml','Content-Length':String(Buffer.byteLength(xml))});
+  check(completed,200,'S3 CompleteMultipartUpload');await completed.text();
+  const tail=await s3(base,largePath,'GET',null,{Range:'bytes=-4'});
+  check(tail,206,'multipart suffix Range');
+  assert.equal(await tail.text(),'DONE');
+  const abortInit=await s3(base,space+'/docs/aborted.bin?uploads','POST',null);
+  check(abortInit,200,'S3 initiate to abort');
+  const abortId=(await abortInit.text()).match(/<UploadId>([^<]+)<\/UploadId>/)?.[1];
+  assert.ok(abortId);
+  const aborted=await s3(base,space+'/docs/aborted.bin?uploadId='+encodeURIComponent(abortId),'DELETE');
+  check(aborted,204,'S3 AbortMultipartUpload');
+
   const list=await s3(base,space+'?list-type=2');
   check(list,200,'S3 ListObjectsV2');assert.match(await list.text(),/a\.txt/);
   await json(base,'/api/disk/gc',{method:'POST',token:writer,
     body:{confirm:false},expected:403});
-  console.log(' PASS: grants, D1 directories, R2 S3 PUT/GET/Range/Copy/List, privacy, share, static and move');
+  console.log(' PASS: grants, D1 directories, R2 S3 PUT/GET/Range/Copy/List/Multipart/Abort, privacy, share, static and move');
 }
 async function once(mode){
   const temporary=await mkdtemp(join(tmpdir(),'imgbed-disk-'+mode+'-'));
