@@ -229,7 +229,7 @@ async function listBucket(db,bucket,url) {
     '<Name>'+xml(bucket)+'</Name><Prefix>'+xml(prefix)+'</Prefix><KeyCount>'+returned+'</KeyCount><MaxKeys>'+max+
     '</MaxKeys><IsTruncated>'+String(more)+'</IsTruncated>'+contents+common+pagination+'</ListBucketResult>');
 }
-async function serveObject(context,node) {
+export async function serveObject(context,node) {
   const {env,request}=context;
   const record=await getDatabase(env).getWithMetadata(node.source_id);
   if (!record) return s3Error('NoSuchKey',404);
