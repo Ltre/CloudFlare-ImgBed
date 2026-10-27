@@ -60,16 +60,22 @@ export async function onRequest(context) {
       if (body.operation === 'rename') {
         const name = String(body.name || '').trim();
         namePart(name);
-        await run(db,'UPDATE disk_spaces SET name=? WHERE id=?',name,body.space);
+        try {await run(db,'UPDATE disk_spaces SET name=? WHERE id=?',name,body.space);}
+        catch(e) {
+          if(/unique|constraint/i.test(String(e))) throw new DiskError('SPACE_NAME_CONFLICT',409);
+          throw e;
+        }
         return respond({success:true});
       }
       if (body.operation === 'delete') {
-        const nodes = await all(db,'SELECT id FROM disk_nodes WHERE space_id=?',body.space);
-        for (const n of nodes) await run(db,'DELETE FROM disk_nodes WHERE id=?',n.id);
+        // A single D1 SQL delete avoids O(files) remote database roundtrips
+        // and stays within Workers' request-duration limits for large disks.
+        const count=await one(db,'SELECT COUNT(*) AS count FROM disk_nodes WHERE space_id=?',body.space);
+        await run(db,'DELETE FROM disk_nodes WHERE space_id=?',body.space);
         await run(db,'DELETE FROM disk_grants WHERE space_id=?',body.space);
         await run(db,'DELETE FROM disk_shares WHERE space_id=?',body.space);
         await run(db,'DELETE FROM disk_spaces WHERE id=?',body.space);
-        return respond({success:true,deleted:nodes.length});
+        return respond({success:true,deleted:Number(count?.count)||0});
       }
       throw new DiskError('INVALID_OPERATION');
     }
