@@ -11,6 +11,7 @@ import {
 import { getDatabase } from '../utils/databaseAdapter.js';
 import { addFileToIndex } from '../utils/indexManager.js';
 import { readSource } from '../utils/disk/read.js';
+import { parseSingleByteRange } from '../file/fileTools.js';
 import { registerS3Object } from '../utils/disk/gc.js';
 import { initMultipart,getMultipart,partUpload,listParts,parseCompletionXml,completeMultipart,clearMultipart,abortMultipart,listUploads } from '../utils/disk/s3Multipart.js';
 
@@ -245,7 +246,17 @@ async function serveObject(context,node) {
   if (record.metadata?.Channel !== 'CloudflareR2') {
     // Serve bytes with the existing ImgBed reader instead of a redirect;
     // S3 SDKs should receive 200/206/HEAD responses directly.
-    const response=await readSource(context,node.source_id,true);
+    // The original ImgBed reader has its own provider ETag. For the S3
+    // gateway our virtual ETag is authoritative. If-Range must be evaluated
+    // against that same ETag, including for Telegram and Discord sources.
+    let readContext=context;
+    if(request.headers.has('Range') && request.headers.has('If-Range') &&
+       request.headers.get('If-Range')!==etag){
+      const headers=new Headers(request.headers);
+      headers.delete('Range');headers.delete('If-Range');
+      readContext={...context,request:new Request(request,{headers})};
+    }
+    const response=await readSource(readContext,node.source_id,true);
     const responseHeaders=new Headers(response.headers);
     responseHeaders.set('ETag',etag);
     return new Response(response.body,{status:response.status,statusText:response.statusText,headers:responseHeaders});
@@ -253,19 +264,21 @@ async function serveObject(context,node) {
   const bucket=env.img_r2;
   if (!bucket) return s3Error('ServiceUnavailable',503);
   // If-Range with a stale entity tag means return the full object, not 206.
-  let range=request.headers.get('Range');
+  let range=request.method==='HEAD'?null:request.headers.get('Range');
   const ifRange=request.headers.get('If-Range');
   if(range && ifRange && ifRange!==etag)range=null;
   let options,begin,end;
   const size=Math.max(0,Number(node.size)||0);
   if (range) {
-    const m=/^bytes=(\d*)-(\d*)$/.exec(range);
-    if (!m || (!m[1] && !m[2])) return s3Error('InvalidRange',416);
-    if (m[1]) { begin=Number(m[1]);end=m[2]?Number(m[2]):size-1; }
-    else { begin=Math.max(0,size-Number(m[2]));end=size-1; }
-    if (!size || begin>=size || end<begin || end>=size) {
-      return new Response(null,{status:416,headers:{'Content-Range':'bytes */'+size}});
+    // Single-range semantics are shared with ImgBed's reader: clamp an
+    // oversized end, support suffix requests, reject unsatisfiable ranges.
+    const span=parseSingleByteRange(range,size);
+    if (!span) {
+      return new Response(null,{status:416,headers:{
+        'Content-Range':'bytes */'+size,'Accept-Ranges':'bytes','ETag':etag
+      }});
     }
+    begin=span.start;end=span.end;
     options={range:{offset:begin,length:end-begin+1}};
   }
   const object=await bucket.get(node.source_id,options);
