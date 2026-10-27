@@ -19,7 +19,9 @@
     "test:wrangler:workers": "node scripts/wrangler-disk-smoke.mjs --mode=workers",
     "dev:disk:pages": "wrangler pages dev frontend-dist --config wrangler.disk-local.jsonc --persist-to .wrangler/disk-dev-state",
     "dev:disk:workers": "node deploy/worker/generate-routes.js && wrangler dev --config deploy/worker/wrangler.disk-local.jsonc --persist-to .wrangler/disk-dev-state",
-    "doctor:local": "node scripts/check-local-toolchain.mjs"
+    "doctor:local": "node scripts/check-local-toolchain.mjs",
+    "build:local": "npx --no-install wrangler pages functions build functions --outdir data/ci-pages-build && node deploy/worker/generate-routes.js && npx --no-install wrangler deploy --config deploy/worker/wrangler.toml --dry-run --outdir data/ci-worker-build",
+    "verify:local": "npm run doctor:local && npm test && npm run test:server && npm run build:local && npm run test:wrangler:local"
   },
   "overrides": {
     "fast-xml-parser": "^5.3.6"
