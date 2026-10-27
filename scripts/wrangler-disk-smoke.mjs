@@ -106,11 +106,22 @@ async function smoke(base,space,writer,reader,otherSpace,otherWriter){
   const put=await s3(base,objectPath,'PUT',body,{'Content-Type':'text/plain',
     'Content-Length':String(body.length)});
   check(put,200,'S3 PUT');
+  const putTag=put.headers.get('ETag');
+  assert.ok(putTag,'S3 PUT must return ETag');
   const sourceId='disk-s3/'+String(put.headers.get('ETag')||'').replace(/^"|"$/g,'');
   assert.match(sourceId,/^disk-s3\/[a-f0-9-]{36}$/i);
   await put.arrayBuffer();
   const get=await s3(base,objectPath);check(get,200,'S3 GET');
+  assert.equal(get.headers.get('ETag'),putTag,'PUT/GET ETags should match');
   assert.equal(await get.text(),body.toString());
+  const head=await s3(base,objectPath,'HEAD');
+  check(head,200,'S3 HEAD');
+  assert.equal(head.headers.get('ETag'),putTag,'HEAD ETag should match');
+  assert.equal(Number(head.headers.get('Content-Length')),body.length);
+  const ifRange=await s3(base,objectPath,'GET',null,
+    {'Range':'bytes=0-4','If-Range':'"outdated-etag"'});
+  check(ifRange,200,'stale If-Range must ignore Range');
+  assert.equal(await ifRange.text(),body.toString());
   const range=await s3(base,objectPath,'GET',null,{Range:'bytes=0-4'});
   check(range,206,'R2 range');assert.equal(await range.text(),'hello');
 
@@ -136,7 +147,12 @@ async function smoke(base,space,writer,reader,otherSpace,otherWriter){
 
   const copy=await s3(base,space+'/docs/b.txt','PUT',null,{
     'x-amz-copy-source':'/'+space+'/docs/a.txt'});
-  check(copy,200,'S3 CopyObject');await copy.arrayBuffer();
+  check(copy,200,'S3 CopyObject');
+  const copiedXml=await copy.text();
+  assert.ok(copiedXml.includes('<ETag>'+putTag+'</ETag>'),'CopyObject XML ETag must match');
+  const copiedHead=await s3(base,space+'/docs/b.txt','HEAD');
+  check(copiedHead,200,'S3 copied HEAD');
+  assert.equal(copiedHead.headers.get('ETag'),putTag);
   // A valid signed CopyObject destination must not allow the sender to
   // substitute an unsigned or modified source key.
   const target=base+'/s3/'+space+'/docs/unsigned-copy.txt';
@@ -207,7 +223,13 @@ async function smoke(base,space,writer,reader,otherSpace,otherWriter){
     '</ETag></Part></CompleteMultipartUpload>';
   const completed=await s3(base,largePath+'?uploadId='+encodeURIComponent(uploadId),
     'POST',xml,{'Content-Type':'application/xml','Content-Length':String(Buffer.byteLength(xml))});
-  check(completed,200,'S3 CompleteMultipartUpload');await completed.text();
+  check(completed,200,'S3 CompleteMultipartUpload');
+  const completionXml=await completed.text();
+  const completeTag=completionXml.match(/<ETag>([^<]+)<\/ETag>/)?.[1];
+  assert.ok(completeTag,'multipart completion must return an ETag');
+  const multiHead=await s3(base,largePath,'HEAD');
+  check(multiHead,200,'S3 multipart HEAD');
+  assert.equal(multiHead.headers.get('ETag'),completeTag);
   const tail=await s3(base,largePath,'GET',null,{Range:'bytes=-4'});
   check(tail,206,'multipart suffix Range');
   assert.equal(await tail.text(),'DONE');
@@ -251,7 +273,10 @@ async function smoke(base,space,writer,reader,otherSpace,otherWriter){
     'ImgBed public upload must not create unauthorized disk references');
 
   const list=await s3(base,space+'?list-type=2');
-  check(list,200,'S3 ListObjectsV2');assert.match(await list.text(),/a\.txt/);
+  check(list,200,'S3 ListObjectsV2');
+  const listXml=await list.text();
+  assert.match(listXml,/a\.txt/);
+  assert.ok(listXml.includes('<ETag>'+putTag+'</ETag>'),'ListObjectsV2 ETag mismatch');
   await json(base,'/api/disk/gc',{method:'POST',token:writer,
     body:{confirm:false},expected:403});
   console.log(' PASS: grants, D1 directories, R2 S3 PUT/GET/Range/Copy/List/Multipart/Abort, privacy, share, static and move');
