@@ -203,30 +203,46 @@ async function collectObjects(db,bucket) {
   }
   return nodes.filter(n=>n.kind==='file').map(n=>({node:n,key:toPath(n)}));
 }
-async function listBucket(db,bucket,url) {
+export async function listBucket(db,bucket,url) {
   const prefix=url.searchParams.get('prefix')||'',delimiter=url.searchParams.get('delimiter')||'';
   if (delimiter && delimiter!=='/') return s3Error('InvalidArgument');
-  const max=Math.max(1,Math.min(1000,Number(url.searchParams.get('max-keys'))||1000));
-  const marker=url.searchParams.get('continuation-token')||url.searchParams.get('marker')||'';
-  const items=(await collectObjects(db,bucket)).filter(n=>n.key.startsWith(prefix) && n.key>marker)
-    .sort((a,b)=>a.key < b.key ? -1 : 1);
-  let returned=0, contents='', prefixes=new Set(), last='';
-  for (const item of items) {
-    const rest=item.key.slice(prefix.length), slash=delimiter ? rest.indexOf('/') : -1;
-    const group=slash>=0 ? prefix+rest.slice(0,slash+1) : null;
-    if (group && prefixes.has(group)) continue;
-    if (returned>=max) break;
-    if (group) {prefixes.add(group);last=item.key;returned++;continue;}
-    contents+='<Contents><Key>'+xml(item.key)+'</Key><Size>'+item.node.size+'</Size><LastModified>'+
-      new Date(item.node.updated_at).toISOString()+'</LastModified><ETag>'+xml(objectEtag(item.node))+'</ETag></Contents>';
-    last=item.key; returned++;
+  const requestedMax=url.searchParams.get('max-keys');
+  const max=requestedMax===null?1000:Number(requestedMax);
+  if (!Number.isSafeInteger(max) || max<0) return s3Error('InvalidArgument');
+  const limit=Math.min(1000,max), v2=url.searchParams.get('list-type')==='2';
+  const marker=url.searchParams.get('continuation-token')||
+    (v2?url.searchParams.get('start-after'):url.searchParams.get('marker'))||'';
+
+  // Paginate *visible entries*, not physical object paths. Otherwise two
+  // files inside a/ can make the next page repeat CommonPrefixes=a/.
+  const visible=new Map();
+  for(const item of await collectObjects(db,bucket)) {
+    if(!item.key.startsWith(prefix)) continue;
+    const rest=item.key.slice(prefix.length);
+    const slash=delimiter?rest.indexOf('/'):-1;
+    const grouped=slash>=0?prefix+rest.slice(0,slash+1):null;
+    const cursor=grouped||item.key;
+    if(cursor<=marker || visible.has(cursor))continue;
+    visible.set(cursor,grouped?{prefix:grouped}:{file:item});
   }
-  const more=items.some(x=>x.key>last) && returned>=max;
-  const common=Array.from(prefixes).map(p=>'<CommonPrefixes><Prefix>'+xml(p)+'</Prefix></CommonPrefixes>').join('');
-  const v2=url.searchParams.get('list-type')==='2';
-  const pagination=more ? (v2?'<NextContinuationToken>':'<NextMarker>')+xml(last)+(v2?'</NextContinuationToken>':'</NextMarker>') : '';
+  const entries=[...visible.entries()].sort((a,b)=>a[0]<b[0]?-1:a[0]>b[0]?1:0);
+  const page=entries.slice(0,limit), more=entries.length>limit;
+  let contents='',common='';
+  for(const [,entry] of page) {
+    if(entry.prefix) {
+      common+='<CommonPrefixes><Prefix>'+xml(entry.prefix)+'</Prefix></CommonPrefixes>';
+    }else{
+      const item=entry.file;
+      contents+='<Contents><Key>'+xml(item.key)+'</Key><Size>'+item.node.size+'</Size><LastModified>'+
+        new Date(item.node.updated_at).toISOString()+'</LastModified><ETag>'+xml(objectEtag(item.node))+'</ETag></Contents>';
+    }
+  }
+  const last=page.length?page[page.length-1][0]:'';
+  const pagination=more && last
+    ?(v2?'<NextContinuationToken>':'<NextMarker>')+xml(last)+(v2?'</NextContinuationToken>':'</NextMarker>')
+    :'';
   return xmlResponse('<?xml version="1.0" encoding="UTF-8"?><ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'+
-    '<Name>'+xml(bucket)+'</Name><Prefix>'+xml(prefix)+'</Prefix><KeyCount>'+returned+'</KeyCount><MaxKeys>'+max+
+    '<Name>'+xml(bucket)+'</Name><Prefix>'+xml(prefix)+'</Prefix><KeyCount>'+page.length+'</KeyCount><MaxKeys>'+limit+
     '</MaxKeys><IsTruncated>'+String(more)+'</IsTruncated>'+contents+common+pagination+'</ListBucketResult>');
 }
 export async function serveObject(context,node) {
