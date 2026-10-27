@@ -68,6 +68,9 @@ export async function onRequest(context) {
         return respond({success:true});
       }
       if (body.operation === 'delete') {
+        // Prevent deleting a partition with unfinished R2 multipart sessions.
+        const active=await one(db,'SELECT COUNT(*) AS count FROM disk_s3_uploads WHERE space_id=?',body.space);
+        if(Number(active?.count)>0)throw new DiskError('SPACE_HAS_ACTIVE_MULTIPART_UPLOADS',409);
         // A single D1 SQL delete avoids O(files) remote database roundtrips
         // and stays within Workers' request-duration limits for large disks.
         const count=await one(db,'SELECT COUNT(*) AS count FROM disk_nodes WHERE space_id=?',body.space);
