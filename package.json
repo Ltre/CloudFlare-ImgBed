@@ -18,7 +18,8 @@
     "test:wrangler:pages": "node scripts/wrangler-disk-smoke.mjs --mode=pages",
     "test:wrangler:workers": "node scripts/wrangler-disk-smoke.mjs --mode=workers",
     "dev:disk:pages": "wrangler pages dev frontend-dist --config wrangler.disk-local.jsonc --persist-to .wrangler/disk-dev-state",
-    "dev:disk:workers": "node deploy/worker/generate-routes.js && wrangler dev --config deploy/worker/wrangler.disk-local.jsonc --persist-to .wrangler/disk-dev-state"
+    "dev:disk:workers": "node deploy/worker/generate-routes.js && wrangler dev --config deploy/worker/wrangler.disk-local.jsonc --persist-to .wrangler/disk-dev-state",
+    "doctor:local": "node scripts/check-local-toolchain.mjs"
   },
   "overrides": {
     "fast-xml-parser": "^5.3.6"
