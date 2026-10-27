@@ -149,3 +149,7 @@ npm run dev:disk:workers
 The local smoke command initializes its own D1 and seeded test access tokens; the manual dev mode starts with no administrator credentials or grants (a deliberately locked-down state). It must be configured before managing a disk.
 
 GitHub Actions additionally runs this HTTP suite after unit tests and Pages/Workers bundle builds. Successful builds are **not** substitutes for a live Cloudflare deployment test; runtime behavior under production bindings and real S3 clients requires separate verification.
+
+### Wrangler Pages configuration filename
+
+Wrangler Pages **does not accept arbitrary `pages dev --config <filename>` values**. The test runner temporarily copies `wrangler.disk-local.jsonc` to root `wrangler.jsonc`, refusing to overwrite any existing file, and removes it after testing. The `npm run dev:disk:pages` command uses a protective wrapper with the same behavior. Both local D1 migrations and the server use the same local persistence directory. `preview_database_id` is set to the local Pages binding name `img_d1`.

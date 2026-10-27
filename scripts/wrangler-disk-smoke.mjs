@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { access, mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, writeFile, rm, copyFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -209,10 +209,21 @@ async function smoke(base,space,writer,reader){
 async function once(mode){
   const temporary=await mkdtemp(join(tmpdir(),'imgbed-disk-'+mode+'-'));
   const store=join(temporary,'state'),port=mode==='pages'?8789:8790;
+  const pagesConfig=join(root,'wrangler.jsonc');
+  let installedPagesConfig=false;
   const config=mode==='pages'?'wrangler.disk-local.jsonc':'deploy/worker/wrangler.disk-local.jsonc';
   let proc=null;
   try{
     await mkdir(store,{recursive:true});
+    // Pages dev explicitly rejects custom --config paths. Use the standard
+    // project-root filename, but refuse to overwrite an existing user config.
+    if(mode==='pages'){
+      let alreadyExists=false;
+      try{await access(pagesConfig);alreadyExists=true;}catch(e){if(e.code!=='ENOENT')throw e;}
+      if(alreadyExists)throw Error('Cannot run isolated Pages test: wrangler.jsonc already exists. Do not overwrite user configuration.');
+      await copyFile(join(root,'wrangler.disk-local.jsonc'),pagesConfig,0);
+      installedPagesConfig=true;
+    }
     console.log('Wrangler '+mode+' local test...');
     for(const file of ['v2.8.0_disk.sql','v2.8.1_disk_s3_multipart.sql','v2.8.2_disk_gc.sql'])
       await command(['d1','execute','img_d1','--local','--config',config,
@@ -227,7 +238,7 @@ async function once(mode){
     const fixture=join(temporary,'seed.sql');await writeFile(fixture,sql);
     await command(['d1','execute','img_d1','--local','--config',config,'--persist-to',store,'--file',fixture]);
     const args=mode==='pages'?
-      ['pages','dev','frontend-dist','--config',config,'--ip','127.0.0.1','--port',String(port),'--persist-to',store]:
+      ['pages','dev','frontend-dist','--ip','127.0.0.1','--port',String(port),'--persist-to',store]:
       ['dev','--config',config,'--ip','127.0.0.1','--port',String(port),'--persist-to',store];
     proc=await server(args,port);
     await smoke('http://127.0.0.1:'+port,space,writer,reader);
@@ -235,6 +246,7 @@ async function once(mode){
   }finally{
     proc?.kill();running=null;
     await pause(500);
+    if(installedPagesConfig)await unlink(pagesConfig);
     await rm(temporary,{recursive:true,force:true,maxRetries:5,retryDelay:200});
   }
 }
