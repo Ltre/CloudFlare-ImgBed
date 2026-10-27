@@ -9,12 +9,15 @@ describe('S3 byte-range / If-Range response semantics',()=>{
     mime:'video/mp4',size:bytes.length};
   async function handler(options={}){
     const db=memoryDatabase();
-    await db.put(sourceId,'',{metadata:{Channel:options.channel||'CloudflareR2',
-      DiskS3Private:true,ListType:'Block'}});
+    const backingId=options.channel==='TelegramNew'?'telegram/original-id':sourceId;
+    const fileNode={...node,source_id:backingId};
+    await db.put(backingId,'',{metadata:{Channel:options.channel||'CloudflareR2',
+      DiskS3Private:options.channel!=='TelegramNew',
+      ListType:options.channel==='TelegramNew'?'White':'Block'}});
     const operations=[];
     const r2={
       async get(id,range){
-        assert.equal(id,sourceId);
+        assert.equal(id,backingId);
         operations.push(range||null);
         const span=range?.range;
         const payload=span?bytes.slice(span.offset,span.offset+span.length):bytes;
@@ -39,7 +42,7 @@ describe('S3 byte-range / If-Range response semantics',()=>{
         method,headers
       })};
     }
-    return {route,ctx,operations,readerCalls};
+    return {route,ctx,operations,readerCalls,node:fileNode};
   }
   it('returns 206 and clamps an end offset beyond EOF',async()=>{
     const {route,ctx,operations}=await handler();
@@ -80,16 +83,16 @@ describe('S3 byte-range / If-Range response semantics',()=>{
     assert.equal(operations[0],null);
   });
   it('applies virtual ETag If-Range to an existing non-R2 ImgBed reader',async()=>{
-    const {route,ctx,readerCalls}=await handler({channel:'TelegramNew'});
+    const {route,ctx,readerCalls,node:legacyNode}=await handler({channel:'TelegramNew'});
     const stale=await route.serveObject(ctx('GET',{
       Range:'bytes=0-4','If-Range':'"old-tag"'
-    }),node);
+    }),legacyNode);
     assert.equal(stale.status,200);
     assert.equal(await stale.text(),'hello world');
     assert.equal(readerCalls[0],null,'stale If-Range must strip Range before provider read');
     const correct=await route.serveObject(ctx('GET',{
-      Range:'bytes=0-4','If-Range':'"12345678-2222-4444-8888-000000000000"'
-    }),node);
+      Range:'bytes=0-4','If-Range':'"virtual-node"'
+    }),legacyNode);
     assert.equal(correct.status,206);
     assert.equal(await correct.text(),'hello');
     assert.equal(readerCalls[1],'bytes=0-4');
