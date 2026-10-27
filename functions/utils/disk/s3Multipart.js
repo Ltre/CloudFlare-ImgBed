@@ -4,6 +4,7 @@
  * Multipart is isolated from ImgBed's existing provider upload implementation.
  */
 import { uuid, one, all, run, DiskError } from './core.js';
+import { registerS3Object } from './gc.js';
 
 export function parseCompletionXml(xml) {
   if (typeof xml !== 'string' || xml.length > 1024*1024) throw new DiskError('MALFORMED_MULTIPART_XML');
@@ -31,7 +32,15 @@ export async function initMultipart(db,r2,spaceId,key,mime) {
   try{
     await run(db,'INSERT INTO disk_s3_uploads(id,r2_upload_id,space_id,object_key,source_id,mime,created_at) VALUES(?,?,?,?,?,?,?)',
       id,upload.uploadId,spaceId,key,sourceId,mime,now);
-  }catch(e){await upload.abort();throw e;}
+    // Track the source before R2 multipart completion, so a crash after
+    // complete() cannot strand an unregistered R2 object.
+    await registerS3Object(db,sourceId);
+  }catch(e){
+    await upload.abort();
+    try{await run(db,'DELETE FROM disk_s3_uploads WHERE id=?',id);}catch(_){}
+    try{await run(db,'DELETE FROM disk_s3_objects WHERE source_id=?',sourceId);}catch(_){}
+    throw e;
+  }
   return {id,sourceId};
 }
 export async function getMultipart(db,spaceId,key,id) {
@@ -93,6 +102,8 @@ export async function clearMultipart(db,record) {
 export async function abortMultipart(db,r2,record) {
   await resumeMultipart(r2,record).abort();
   await clearMultipart(db,record);
+  await run(db,"DELETE FROM disk_s3_objects WHERE source_id=? AND status='active' AND NOT EXISTS(SELECT 1 FROM disk_nodes WHERE source_id=?)",
+    record.source_id,record.source_id);
 }
 export async function listUploads(db,spaceId) {
   return all(db,'SELECT id,object_key,created_at FROM disk_s3_uploads WHERE space_id=? ORDER BY created_at LIMIT 1000',spaceId);
