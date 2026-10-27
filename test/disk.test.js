@@ -75,6 +75,16 @@ describe('D1 virtual disk, shares and cross-partition operations', () => {
     await assert.rejects(sharedNode(db,share.token,'Outside'),{code:'NODE_NOT_FOUND'});
     assert.equal((await one(db,'SELECT token_hash FROM disk_shares WHERE id=?',share.id)).token_hash,await hashToken(share.token));
   });
+  it('supports constant-query batch deletion of large partitions',async()=>{
+    for(let i=0;i<200;i++) {
+      await insertNode(db,{id:uuid(),space_id:a.id,parent_id:'',name:'x-'+i,
+        kind:'file',source_id:'id-'+i,mime:'text/plain',size:i,
+        is_public:0,created_at:1,updated_at:1});
+    }
+    const deleted=await db.prepare('DELETE FROM disk_nodes WHERE space_id=?').bind(a.id).run();
+    assert.equal(deleted.meta.changes,200);
+    assert.equal((await one(db,'SELECT COUNT(*) AS count FROM disk_nodes WHERE space_id=?',a.id)).count,0);
+  });
   it('creates collaboration grants and opts in to static file exposure',async()=>{
     const grant=await createGrant(db,a.id,'read','Reviewer');
     assert.equal(grant.token.length,64);

@@ -29,6 +29,17 @@ describe('S3 SigV4 interoperability and CORS',()=>{
     assert.equal(await verifyS3(new Request('https://storage.example.test'+path,{headers}),
       {...env,DISK_S3_SECRET_KEY:'changed'}),false);
   });
+  it('refuses an unsigned x-amz-copy-source even when destination signature is valid',async()=>{
+    const date=timestamp(),path='/s3/disk/destination.txt';
+    const {signature,scope}=sign(date,'PUT',path);
+    const auth='AWS4-HMAC-SHA256 Credential='+key+'/'+scope+
+      ', SignedHeaders=host;x-amz-date, Signature='+signature;
+    const request=new Request('https://storage.example.test'+path,{
+      method:'PUT',headers:{Authorization:auth,'x-amz-date':date,
+        'x-amz-copy-source':'/disk/sensitive-source.txt'}
+    });
+    assert.equal(await verifyS3(request,env),false);
+  });
   it('rejects malformed signature, expired and missing credentials',async()=>{
     assert.equal(await verifyS3(new Request('https://storage.example.test/s3/disk/file'),env),false);
     assert.equal(await verifyS3(new Request('https://storage.example.test/s3/disk/file',{

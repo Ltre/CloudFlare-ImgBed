@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { access, mkdtemp, mkdir, writeFile, rm, copyFile, unlink } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -53,8 +53,11 @@ function signature(url,method,body,additional={}){
   const headers=new Headers(additional);
   headers.set('x-amz-date',date);
   headers.set('x-amz-content-sha256',payload);
-  const names='host;x-amz-content-sha256;x-amz-date';
-  const headerText='host:'+u.host+'\nx-amz-content-sha256:'+payload+'\nx-amz-date:'+date+'\n';
+  // Sign every x-amz-* header. In particular CopyObject's source must be
+  // authenticated: otherwise a valid signed destination can copy arbitrary files.
+  const nameList=['host', ...headers.keys()].filter(n=>n==='host'||n.startsWith('x-amz-')).sort();
+  const names=nameList.join(';');
+  const headerText=nameList.map(n=>n+':'+(n==='host'?u.host:headers.get(n)).trim().replace(/\s+/g,' ')).join('\n')+'\n';
   const pairs=[...u.searchParams].map(([k,v])=>[encodeURIComponent(k),encodeURIComponent(v)])
     .sort((a,b)=>a[0]<b[0]?-1:a[0]>b[0]?1:a[1]<b[1]?-1:a[1]>b[1]?1:0);
   const canonical=[method,u.pathname,pairs.map(p=>p.join('=')).join('&'),headerText,names,payload].join('\n');
@@ -81,7 +84,7 @@ async function json(base,path,{method='GET',token,body,expected=200}={}){
 function check(response,status,what){
   assert.equal(response.status,status,what+' returned HTTP '+response.status);
 }
-async function smoke(base,space,writer,reader){
+async function smoke(base,space,writer,reader,otherSpace,otherWriter){
   const query='?space='+space;
   await json(base,'/api/disk/spaces',{expected:403});
   const spaces=await json(base,'/api/disk/spaces',{token:reader});
@@ -93,6 +96,10 @@ async function smoke(base,space,writer,reader){
     method:'POST',token:reader,body:{space,path:'',name:'denied'},expected:403});
   const info=await json(base,'/api/disk/browse'+query,{token:reader});
   assert.ok(info.entries.some(e=>e.name==='docs'));
+  await json(base,'/api/disk/mkdir',{method:'POST',token:writer,body:{space,path:'docs',name:'2026'}});
+  await json(base,'/api/disk/mkdir',{method:'POST',token:writer,body:{space,path:'docs/2026',name:'q4'}});
+  const nested=await json(base,'/api/disk/browse'+query+'&path=docs%2F2026%2Fq4',{token:reader});
+  assert.deepEqual(nested.breadcrumbs.map(x=>x.path),['','docs','docs/2026','docs/2026/q4']);
 
   const body=Buffer.from('hello Wrangler, R2, D1 and virtual disk!');
   const objectPath=space+'/docs/a.txt';
@@ -121,15 +128,58 @@ async function smoke(base,space,writer,reader){
     body:{space,path:'docs/a.txt',label:'local',hours:1}});
   const shared=await fetch(base+'/api/disk-share/'+ticket.share.token);
   check(shared,200,'capability read');assert.equal(await shared.text(),body.toString());
+  const revoke=await json(base,'/api/disk/shares?space='+space+'&id='+ticket.share.id,{
+    method:'DELETE',token:writer});
+  assert.equal(revoke.success,true);
+  const revoked=await fetch(base+'/api/disk-share/'+ticket.share.token);
+  check(revoked,404,'share revocation');await revoked.text();
 
   const copy=await s3(base,space+'/docs/b.txt','PUT',null,{
     'x-amz-copy-source':'/'+space+'/docs/a.txt'});
   check(copy,200,'S3 CopyObject');await copy.arrayBuffer();
+  // A valid signed CopyObject destination must not allow the sender to
+  // substitute an unsigned or modified source key.
+  const target=base+'/s3/'+space+'/docs/unsigned-copy.txt';
+  const unsignedCopy=signature(target,'PUT',null);
+  unsignedCopy.headers.set('x-amz-copy-source','/'+space+'/docs/a.txt');
+  const rejectUnsigned=await fetch(target,unsignedCopy);
+  check(rejectUnsigned,403,'CopyObject unsigned source rejected');
+  await rejectUnsigned.text();
+
+  const original=signature(target,'PUT',null,{'x-amz-copy-source':'/'+space+'/docs/a.txt'});
+  original.headers.set('x-amz-copy-source','/'+space+'/docs/replaced.txt');
+  const rejectTamper=await fetch(target,original);
+  check(rejectTamper,403,'CopyObject changed signed source rejected');
+  await rejectTamper.text();
+
   await json(base,'/api/disk/transfer',{method:'POST',token:writer,
     body:{sourceSpace:space,sourcePath:'docs/b.txt',destinationSpace:space,
       destinationPath:'',name:'moved.txt',operation:'move'}});
   const rootView=await json(base,'/api/disk/browse'+query,{token:reader});
   assert.ok(rootView.entries.some(e=>e.name==='moved.txt'));
+  // Different partitions require independent grants: read the source and
+  // write the destination; only the source writer may perform a move.
+  const crossCopy=await json(base,'/api/disk/transfer',{
+    method:'POST',token:reader+','+otherWriter,
+    body:{sourceSpace:space,sourcePath:'docs/a.txt',
+      destinationSpace:otherSpace,destinationPath:'',name:'cross-copy.txt',operation:'copy'}});
+  assert.equal(crossCopy.success,true);
+  const crossFile=await s3(base,otherSpace+'/cross-copy.txt');
+  check(crossFile,200,'cross-partition copy');assert.equal(await crossFile.text(),body.toString());
+  await json(base,'/api/disk/transfer',{
+    method:'POST',token:reader+','+otherWriter,
+    body:{sourceSpace:space,sourcePath:'moved.txt',
+      destinationSpace:otherSpace,destinationPath:'',name:'cross-move.txt',operation:'move'},
+    expected:403
+  });
+  await json(base,'/api/disk/transfer',{
+    method:'POST',token:writer+','+otherWriter,
+    body:{sourceSpace:space,sourcePath:'moved.txt',
+      destinationSpace:otherSpace,destinationPath:'',name:'cross-move.txt',operation:'move'}});
+  const movedAcross=await json(base,'/api/disk/browse?space='+otherSpace,{token:otherWriter});
+  assert.ok(movedAcross.entries.some(e=>e.name==='cross-move.txt'));
+  const originalSpaceAfterMove=await json(base,'/api/disk/browse'+query,{token:reader});
+  assert.ok(!originalSpaceAfterMove.entries.some(e=>e.name==='moved.txt'));
 
 
   // Real Cloudflare R2 multipart operations; non-final part >= 5 MiB.
@@ -209,44 +259,35 @@ async function smoke(base,space,writer,reader){
 async function once(mode){
   const temporary=await mkdtemp(join(tmpdir(),'imgbed-disk-'+mode+'-'));
   const store=join(temporary,'state'),port=mode==='pages'?8789:8790;
-  const pagesConfig=join(root,'wrangler.jsonc');
-  let installedPagesConfig=false;
   const config=mode==='pages'?'wrangler.disk-local.jsonc':'deploy/worker/wrangler.disk-local.jsonc';
   let proc=null;
   try{
     await mkdir(store,{recursive:true});
-    // Pages dev explicitly rejects custom --config paths. Use the standard
-    // project-root filename, but refuse to overwrite an existing user config.
-    if(mode==='pages'){
-      let alreadyExists=false;
-      try{await access(pagesConfig);alreadyExists=true;}catch(e){if(e.code!=='ENOENT')throw e;}
-      if(alreadyExists)throw Error('Cannot run isolated Pages test: wrangler.jsonc already exists. Do not overwrite user configuration.');
-      await copyFile(join(root,'wrangler.disk-local.jsonc'),pagesConfig,0);
-      installedPagesConfig=true;
-    }
     console.log('Wrangler '+mode+' local test...');
-    for(const file of ['v2.8.0_disk.sql','v2.8.1_disk_s3_multipart.sql','v2.8.2_disk_gc.sql'])
+    for(const file of ['v2.8.0_disk.sql','v2.8.1_disk_s3_multipart.sql','v2.8.2_disk_gc.sql','v2.8.3_disk_gc_recovery.sql'])
       await command(['d1','execute','img_d1','--local','--config',config,
         '--persist-to',store,'--file',join(root,'database/migrations',file)]);
-    const space=randomUUID(),writer=randomBytes(32).toString('hex'),
-      reader=randomBytes(32).toString('hex');
+    const space=randomUUID(),otherSpace=randomUUID(),writer=randomBytes(32).toString('hex'),
+      reader=randomBytes(32).toString('hex'),otherWriter=randomBytes(32).toString('hex');
     const sql="INSERT INTO disk_spaces(id,name,created_at) VALUES('"+space+"','Local Test',"+Date.now()+");\n"+
       "INSERT INTO disk_grants(id,space_id,label,role,token_hash,created_at) VALUES('"+
         randomUUID()+"','"+space+"','writer','write','"+sha(writer)+"',"+Date.now()+");\n"+
       "INSERT INTO disk_grants(id,space_id,label,role,token_hash,created_at) VALUES('"+
-        randomUUID()+"','"+space+"','reader','read','"+sha(reader)+"',"+Date.now()+");";
+        randomUUID()+"','"+space+"','reader','read','"+sha(reader)+"',"+Date.now()+");\n"+
+      "INSERT INTO disk_spaces(id,name,created_at) VALUES('"+otherSpace+"','Cross-partition Test',"+Date.now()+");\n"+
+      "INSERT INTO disk_grants(id,space_id,label,role,token_hash,created_at) VALUES('"+
+        randomUUID()+"','"+otherSpace+"','writer-B','write','"+sha(otherWriter)+"',"+Date.now()+");";
     const fixture=join(temporary,'seed.sql');await writeFile(fixture,sql);
     await command(['d1','execute','img_d1','--local','--config',config,'--persist-to',store,'--file',fixture]);
     const args=mode==='pages'?
-      ['pages','dev','frontend-dist','--ip','127.0.0.1','--port',String(port),'--persist-to',store]:
+      ['pages','dev','frontend-dist','--config',config,'--ip','127.0.0.1','--port',String(port),'--persist-to',store]:
       ['dev','--config',config,'--ip','127.0.0.1','--port',String(port),'--persist-to',store];
     proc=await server(args,port);
-    await smoke('http://127.0.0.1:'+port,space,writer,reader);
+    await smoke('http://127.0.0.1:'+port,space,writer,reader,otherSpace,otherWriter);
     console.log('Wrangler '+mode+' PASS');
   }finally{
     proc?.kill();running=null;
     await pause(500);
-    if(installedPagesConfig)await unlink(pagesConfig);
     await rm(temporary,{recursive:true,force:true,maxRetries:5,retryDelay:200});
   }
 }

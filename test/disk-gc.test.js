@@ -8,7 +8,7 @@ describe('Safe S3 storage garbage collection',()=>{
  const expired=Date.now()-25*3600*1000;
  beforeEach(async()=>{
    db=new SqliteD1(':memory:');
-   for(const sql of ['v2.8.0_disk.sql','v2.8.1_disk_s3_multipart.sql','v2.8.2_disk_gc.sql'])
+   for(const sql of ['v2.8.0_disk.sql','v2.8.1_disk_s3_multipart.sql','v2.8.2_disk_gc.sql','v2.8.3_disk_gc_recovery.sql'])
      db.exec(readFileSync(new URL('../database/migrations/'+sql,import.meta.url),'utf8'));
    space=await createSpace(db,'storage');
    deletes=[];kv=new Map();
@@ -46,6 +46,30 @@ describe('Safe S3 storage garbage collection',()=>{
    await db.prepare("UPDATE disk_s3_objects SET status='deleting' WHERE source_id=?").bind(source).run();
    await assert.rejects(insertNode(db,{id:uuid(),space_id:space.id,parent_id:'',name:'racing.txt',
      kind:'file',source_id:source,mime:'text/plain',size:10,is_public:0,created_at:1,updated_at:1}));
+ });
+ it('keeps a failed deletion claim protected from new references',async()=>{
+   const source=await oldSource();
+   r2.delete=async()=>{throw new Error('simulated incomplete R2 delete');};
+   const failed=await collectUnusedS3Objects(ctx,{confirm:true});
+   assert.equal(failed.failed.length,1);
+   const status=await db.prepare('SELECT status,gc_claimed_at FROM disk_s3_objects WHERE source_id=?').bind(source).first();
+   assert.equal(status.status,'deleting');assert.ok(status.gc_claimed_at);
+   await assert.rejects(insertNode(db,{id:uuid(),space_id:space.id,parent_id:'',name:'lost.bin',
+     kind:'file',source_id:source,mime:'application/octet-stream',size:1,is_public:0,created_at:1,updated_at:1}));
+ });
+ it('retries a stale deletion claim without unprotecting its source',async()=>{
+   const source=await oldSource();
+   await db.prepare("UPDATE disk_s3_objects SET status='deleting',gc_claimed_at=? WHERE source_id=?")
+     .bind(Date.now()-15*60*1000,source).run();
+   const result=await collectUnusedS3Objects(ctx,{confirm:true});
+   assert.deepEqual(result.removed,[source]);
+ });
+ it('skips an object referenced by an unfinished multipart upload',async()=>{
+   const source=await oldSource();
+   await db.prepare('INSERT INTO disk_s3_uploads(id,r2_upload_id,space_id,object_key,source_id,mime,created_at) VALUES(?,?,?,?,?,?,?)')
+     .bind(uuid(),'remote',space.id,'waiting.bin',source,'application/octet-stream',Date.now()).run();
+   assert.equal((await collectUnusedS3Objects(ctx,{confirm:true})).checked,0);
+   assert.equal(deletes.length,0);
  });
  it('does not delete objects younger than 24 hours',async()=>{
    const source='disk-s3/'+uuid();

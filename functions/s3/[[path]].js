@@ -109,6 +109,10 @@ export async function verifyS3(request,env) {
   const delta=(Date.now()-moment)/1000;
   if (presigned ? delta < -900 || delta > expires : Math.abs(delta)>900) return false;
 
+  // The CopyObject source changes which physical object is referenced.
+  // A signature which doesn't cover it is not authorization for that source.
+  if(request.headers.has('x-amz-copy-source') &&
+     !signedHeaders.split(';').includes('x-amz-copy-source')) return false;
   const names=signedHeaders.split(';');
   if (!names.includes('host') || names.some((n,i)=>!n || n !== n.toLowerCase() ||
      (i>0 && n<=names[i-1]))) return false;
