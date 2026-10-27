@@ -90,14 +90,14 @@ async function smoke(base,space,writer,reader,otherSpace,otherWriter){
   const spaces=await json(base,'/api/disk/spaces',{token:reader});
   assert.ok(spaces.spaces.some(s=>s.id===space));
   const folder=await json(base,'/api/disk/mkdir',{
-    method:'POST',token:writer,body:{space,path:'',name:'docs'}});
+    method:'POST',token:writer,body:{space,path:'',name:'docs'},expected:201});
   assert.equal(folder.node.name,'docs');
   await json(base,'/api/disk/mkdir',{
     method:'POST',token:reader,body:{space,path:'',name:'denied'},expected:403});
   const info=await json(base,'/api/disk/browse'+query,{token:reader});
   assert.ok(info.entries.some(e=>e.name==='docs'));
-  await json(base,'/api/disk/mkdir',{method:'POST',token:writer,body:{space,path:'docs',name:'2026'}});
-  await json(base,'/api/disk/mkdir',{method:'POST',token:writer,body:{space,path:'docs/2026',name:'q4'}});
+  await json(base,'/api/disk/mkdir',{method:'POST',token:writer,body:{space,path:'docs',name:'2026'},expected:201});
+  await json(base,'/api/disk/mkdir',{method:'POST',token:writer,body:{space,path:'docs/2026',name:'q4'},expected:201});
   const nested=await json(base,'/api/disk/browse'+query+'&path=docs%2F2026%2Fq4',{token:reader});
   assert.deepEqual(nested.breadcrumbs.map(x=>x.path),['','docs','docs/2026','docs/2026/q4']);
 
@@ -124,6 +124,16 @@ async function smoke(base,space,writer,reader,otherSpace,otherWriter){
   assert.equal(await ifRange.text(),body.toString());
   const range=await s3(base,objectPath,'GET',null,{Range:'bytes=0-4'});
   check(range,206,'R2 range');assert.equal(await range.text(),'hello');
+  // Valid end beyond EOF is clamped (206); start beyond EOF is unsatisfiable.
+  const overhang=await s3(base,objectPath,'GET',null,{'Range':'bytes=0-999999'});
+  check(overhang,206,'Range end clamped to EOF');
+  assert.equal(overhang.headers.get('Content-Range'),'bytes 0-'+(body.length-1)+'/'+body.length);
+  assert.equal(await overhang.text(),body.toString());
+  const badRange=await s3(base,objectPath,'GET',null,{'Range':'bytes=999999-'});
+  check(badRange,416,'unsatisfiable Range');await badRange.text();
+  const suffix=await s3(base,objectPath,'GET',null,{'Range':'bytes=-5'});
+  check(suffix,206,'valid suffix Range');
+  assert.equal(await suffix.text(),body.subarray(body.length-5).toString());
 
   const dir=await json(base,'/api/disk/browse'+query+'&path=docs',{token:reader});
   const file=dir.entries.find(e=>e.name==='a.txt');
@@ -136,7 +146,7 @@ async function smoke(base,space,writer,reader,otherSpace,otherWriter){
   const pub=await fetch(base+'/disk-static/'+space+'/docs/a.txt');
   check(pub,200,'public static URL');assert.equal(await pub.text(),body.toString());
   const ticket=await json(base,'/api/disk/shares',{method:'POST',token:writer,
-    body:{space,path:'docs/a.txt',label:'local',hours:1}});
+    body:{space,path:'docs/a.txt',label:'local',hours:1},expected:201});
   const shared=await fetch(base+'/api/disk-share/'+ticket.share.token);
   check(shared,200,'capability read');assert.equal(await shared.text(),body.toString());
   const revoke=await json(base,'/api/disk/shares?space='+space+'&id='+ticket.share.id,{
