@@ -11,6 +11,13 @@ import { collectUnusedS3Objects } from '../../utils/disk/gc.js';
  * upload/index paths. POST/DELETE always require administrator or a scoped
  * collaborator write key, never rely on untrusted space/path parameters alone.
  */
+// Collaborators operate on virtual node paths/IDs, not physical ImgBed IDs.
+// Apply the same privacy rule to write responses as to directory browsing.
+export function nodeForPrincipal(node,principal) {
+  if(principal.kind==='admin')return node;
+  const {source_id,...safe}=node;
+  return safe;
+}
 export async function onRequest(context) {
   const { request, env } = context;
   const url = new URL(request.url);
@@ -89,20 +96,23 @@ export async function onRequest(context) {
       // Collaborator listings must not expose physical ImgBed storage IDs.
       // Reading a file is still available via a time-limited preview ticket.
       if(principal.kind!=='admin')
-        result.entries=result.entries.map(({source_id,...entry})=>entry);
+        result.entries=result.entries.map(entry=>nodeForPrincipal(entry,principal));
       return respond({success:true,...result});
     }
     if (action === 'mkdir' && method === 'POST') {
-      await access(context,body.space,'write');
-      return respond({success:true,node:await mkdir(db,body.space,body.path || '',body.name)},201);
+      const principal=await access(context,body.space,'write');
+      return respond({success:true,node:nodeForPrincipal(
+        await mkdir(db,body.space,body.path || '',body.name),principal)},201);
     }
     if (action === 'import' && method === 'POST') {
-      await access(context,body.space,'write');
-      return respond({success:true,node:await linkFile(env,db,body.space,body.path || '',body.sourceId,body.name)},201);
+      const principal=await access(context,body.space,'write');
+      return respond({success:true,node:nodeForPrincipal(
+        await linkFile(env,db,body.space,body.path || '',body.sourceId,body.name),principal)},201);
     }
     if (action === 'rename' && method === 'POST') {
-      await access(context,body.space,'write');
-      return respond({success:true,node:await renameNode(db,body.space,body.path,body.name)});
+      const principal=await access(context,body.space,'write');
+      return respond({success:true,node:nodeForPrincipal(
+        await renameNode(db,body.space,body.path,body.name),principal)});
     }
     if (action === 'transfer' && method === 'POST') {
       await access(context,body.sourceSpace,'read');
@@ -118,8 +128,9 @@ export async function onRequest(context) {
       return respond({success:true,deleted:await deleteTree(db,await resolve(db,s,url.searchParams.get('path'),false))});
     }
     if (action === 'public' && method === 'POST') {
-      await access(context,body.space,'write');
-      return respond({success:true,node:await publicNode(db,body.space,body.path,body.enabled === true)});
+      const principal=await access(context,body.space,'write');
+      return respond({success:true,node:nodeForPrincipal(
+        await publicNode(db,body.space,body.path,body.enabled === true),principal)});
     }
     if (action === 'grants') {
       if (method === 'GET') {
