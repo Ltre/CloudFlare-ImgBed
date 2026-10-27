@@ -76,3 +76,11 @@ npm run test:wrangler:local
 **离首次正式本地验收：** 还需通过 G1 一个关口（含所有本地单测、bundle 和 Wrangler HTTP 真实运行；出现 P0/P1 先修复）。
 **离最终功能验收：** 还需 G1、G2、G3 三个关口。
 **离完整交付结束：** 还需 G1、G2、G3、G4 四个关口。不能按提交数量换算百分比。
+
+
+### G1 修补记录：2026-10-27，Range / 本地烟雾测试 HTTP 契约
+
+- 修复 S3 Range 对合法越界结束位置返回 416 的问题；现在复用现有 `parseSingleByteRange`，并针对 R2 与 ImgBed 非 R2 渠道统一 `If-Range` 验证语义。
+- 修正烟雾测试对目录创建、分享创建响应 201 的误判；加入后缀范围、起始位置不可满足 416、结尾超长裁剪 206 的真实 HTTP 断言。
+- 新增 `test/s3-range-route.test.js` 隔离测试。已执行仓库真实范围解析器的 8 个输入测试并全部通过；**新增隔离测试本身未运行**，不可替代完整 Mocha 测试或 workerd。
+- 本轮查到 GitHub Actions 运行记录仍为 **0**。下一步必须获取 `npm ci && npm test && npm run test:wrangler:local` 的实际成功日志，然后才允许声称 G1 通过。
