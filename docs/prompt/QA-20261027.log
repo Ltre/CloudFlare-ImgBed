@@ -579,3 +579,46 @@ npm test
 如果出现下一个错误，请提供新的首个失败用例或完整错误，继续按 G1 阻塞缺陷清单修复。
 
 **当前进度：G1 本地验收阶段，Node.js ESM 模块解析阻塞已修复并提交，等待本机 npm test 结果及 Wrangler Pages/Workers 实测。现在是否可以验收：否。**
+
+
+问：
+
+    继续
+
+答：
+
+继续按既定范围推进 **G1 本地验收**。这轮重点检查上次修复后的测试依赖链，找出还可能导致 `npm test` 失败的确定性问题，直接修复并提交。
+
+我也会核对当前 CI 状态，并把本轮修改、实际验证结果追加到今天的 QA 和开发日志。结尾仍明确说明进度及是否可以验收。
+
+检查 S3 列表接口时发现一个可复现的兼容问题：按目录分组的 `ListObjectsV2` 分页，可能在翻到下一页时重复返回上一页的目录前缀。同步工具使用 `delimiter=/` 和较小 `max-keys` 时尤其容易触发。
+
+这是既有 S3 列表功能的正确性问题。我会修正分页游标处理，并直接执行该函数的边界用例；修复结果也会纳入 G1 测试。
+
+本轮已修复 **S3 文件列表分页问题**，并推送到 `d2tunnel-disk` 分支。
+
+主要修改：
+
+- 修复 `ListObjectsV2` 使用 `delimiter=/` 分页时，目录前缀在下一页重复出现的问题。
+- 调整分页游标，使其按用户可见的文件或目录项推进，而不是按目录内部的物理文件推进。
+- 补充 `start-after`、V1 `marker` 和 `max-keys` 边界处理。
+- 新增 `test/s3-list-pagination.test.js`，并扩展 Wrangler HTTP 验收脚本，检查跨页重复和漏项。
+
+**已执行的验证：**直接运行了仓库中的实际列表生成函数及目录路径解析函数，验证了 V1/V2 分页、三级列表结果、`start-after` 和边界参数，检查通过。
+
+本轮主要提交：
+
+- `3bffbf81` — 修复 S3 分页逻辑
+- `129f54a9` — 新增分页回归测试
+- `500af1cc` — 扩展 Wrangler HTTP 验收场景
+
+这些验证尚不能替代完整 `npm test` 或 Wrangler 实测。
+
+已将本轮的代码变更、测试证据和待完成事项追加到当天的 QA 与开发日志，并更新验收计划。
+
+- [查看最新开发分支](https://github.com/Ltre/CloudFlare-ImgBed/tree/d2tunnel-disk)
+- [查看今日开发日志](https://github.com/Ltre/CloudFlare-ImgBed/blob/d2tunnel-disk/docs/log/dev-20261027.md)
+
+下一步需要在可安装依赖的环境执行 `npm test` 和 `npm run test:wrangler:local`，确认 Pages/Workers 两套真实 HTTP 测试结果。当前 GitHub Actions 仍没有运行记录，因此不能把这轮函数级验证算作完整验收。
+
+**当前进度：G1 本地验收中；G0 已完成，G2–G4 尚未开始。距离首次验收还差完整 npm 测试、Pages/Workers Wrangler 实测及失败项复测。是否可以验收：否。**
