@@ -117,3 +117,35 @@ Bulk S3 DeleteObjects (up to 1,000 keys/request) is supported with XML input. Bo
 `POST /api/disk/gc` requires administrator authentication. Send `{"confirm":false,"max":25}` to preview candidates; then send `{"confirm":true,"max":25}` to reclaim eligible objects, with a hard limit of 50 per request. Only gateway-created `disk-s3/<uuid>` objects recorded after migration v2.8.2 are candidates, and only after they have been unreferenced for at least 24 hours. D1 rechecks references atomically before marking an object as deleting; triggers reject new references while R2 deletion is in progress. The administrator page includes a 回收空间 action. It does not reclaim any legacy ImgBed uploads or externally managed provider content.
 
 S3-owned R2 objects are marked private in ImgBed metadata: ordinary unauthenticated `/file/<source-id>` requests remain blocked. S3 SigV4 and explicit virtual-disk share/static/preview permissions use the authorized private R2 reader instead. This separation is important when using S3 for private files.
+
+## Real local Wrangler testing (Pages + Workers)
+
+Requires **Node.js 22** and installed dependencies (`npm ci`). Tests use **Wrangler's actual local workerd/Miniflare runtime**, not the Docker substitute or hand-written storage mocks.
+
+```bash
+npm ci
+npm run test:wrangler:local
+# Or run independently:
+npm run test:wrangler:pages
+npm run test:wrangler:workers
+```
+
+The smoke script `scripts/wrangler-disk-smoke.mjs` creates an isolated temporary state directory **for each deployment mode**, invokes real `wrangler d1 execute ... --local` for all three disk migrations, seeds one partition and read/write capability grants, launches `wrangler pages dev` or `wrangler dev`, then makes actual HTTP requests. Checks include S3 AWS SigV4 authentication, R2 upload/download/byte range, copy, KV metadata, D1 directories, scoped collaborator permissions, hiding internal source IDs, opt-in static file access and expiring file sharing. It automatically cleans up temporary local state and doesn't require a Cloudflare login or production resources.
+
+Use `wrangler.disk-local.jsonc` for Pages, `deploy/worker/wrangler.disk-local.jsonc` for Workers; both contain **fixed test-only S3 credentials**. Do not deploy these two configurations or reuse their credentials in production.
+
+To develop interactively with persistent local bindings, initialize the local D1 schema with these commands:
+
+```bash
+npx --no-install wrangler d1 execute img_d1 --local --config wrangler.disk-local.jsonc --persist-to .wrangler/disk-dev-state --file database/migrations/v2.8.0_disk.sql
+npx --no-install wrangler d1 execute img_d1 --local --config wrangler.disk-local.jsonc --persist-to .wrangler/disk-dev-state --file database/migrations/v2.8.1_disk_s3_multipart.sql
+npx --no-install wrangler d1 execute img_d1 --local --config wrangler.disk-local.jsonc --persist-to .wrangler/disk-dev-state --file database/migrations/v2.8.2_disk_gc.sql
+npm run dev:disk:pages
+# Alternatively use the same migrations with --config deploy/worker/wrangler.disk-local.jsonc
+# and run:
+npm run dev:disk:workers
+```
+
+The local smoke command initializes its own D1 and seeded test access tokens; the manual dev mode starts with no administrator credentials or grants (a deliberately locked-down state). It must be configured before managing a disk.
+
+GitHub Actions additionally runs this HTTP suite after unit tests and Pages/Workers bundle builds. Successful builds are **not** substitutes for a live Cloudflare deployment test; runtime behavior under production bindings and real S3 clients requires separate verification.

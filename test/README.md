@@ -98,3 +98,7 @@ The main repository's `.github/workflows/regression.yml` runs on PRs targeting `
 4. Builds Pages Functions.
 
 The runner reports test counts; this document maintains functional scope rather than a fixed numeric pass criterion. CI supports code review. Changes that need real channel or deployment validation should describe that verification in the PR.
+
+## Wrangler integration smoke
+
+Run `npm run test:wrangler:local` after `npm ci` for real local Pages + Workers HTTP requests backed by Wrangler's D1, KV and R2 emulators. The script uses disposable state and all three migrations. Use `npm run test:wrangler:pages` or `npm run test:wrangler:workers` to isolate a failing mode. See `docs/disk-cloudflare.md` for manual local development and credential boundaries.
