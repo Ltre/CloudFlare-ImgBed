@@ -53,8 +53,11 @@ function signature(url,method,body,additional={}){
   const headers=new Headers(additional);
   headers.set('x-amz-date',date);
   headers.set('x-amz-content-sha256',payload);
-  const names='host;x-amz-content-sha256;x-amz-date';
-  const headerText='host:'+u.host+'\nx-amz-content-sha256:'+payload+'\nx-amz-date:'+date+'\n';
+  // Sign every x-amz-* header. In particular CopyObject's source must be
+  // authenticated: otherwise a valid signed destination can copy arbitrary files.
+  const nameList=['host', ...headers.keys()].filter(n=>n==='host'||n.startsWith('x-amz-')).sort();
+  const names=nameList.join(';');
+  const headerText=nameList.map(n=>n+':'+(n==='host'?u.host:headers.get(n)).trim().replace(/\s+/g,' ')).join('\n')+'\n';
   const pairs=[...u.searchParams].map(([k,v])=>[encodeURIComponent(k),encodeURIComponent(v)])
     .sort((a,b)=>a[0]<b[0]?-1:a[0]>b[0]?1:a[1]<b[1]?-1:a[1]>b[1]?1:0);
   const canonical=[method,u.pathname,pairs.map(p=>p.join('=')).join('&'),headerText,names,payload].join('\n');
