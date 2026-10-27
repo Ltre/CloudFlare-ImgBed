@@ -128,6 +128,21 @@ async function smoke(base,space,writer,reader){
   const copy=await s3(base,space+'/docs/b.txt','PUT',null,{
     'x-amz-copy-source':'/'+space+'/docs/a.txt'});
   check(copy,200,'S3 CopyObject');await copy.arrayBuffer();
+  // A valid signed CopyObject destination must not allow the sender to
+  // substitute an unsigned or modified source key.
+  const target=base+'/s3/'+space+'/docs/unsigned-copy.txt';
+  const unsignedCopy=signature(target,'PUT',null);
+  unsignedCopy.headers.set('x-amz-copy-source','/'+space+'/docs/a.txt');
+  const rejectUnsigned=await fetch(target,unsignedCopy);
+  check(rejectUnsigned,403,'CopyObject unsigned source rejected');
+  await rejectUnsigned.text();
+
+  const original=signature(target,'PUT',null,{'x-amz-copy-source':'/'+space+'/docs/a.txt'});
+  original.headers.set('x-amz-copy-source','/'+space+'/docs/replaced.txt');
+  const rejectTamper=await fetch(target,original);
+  check(rejectTamper,403,'CopyObject changed signed source rejected');
+  await rejectTamper.text();
+
   await json(base,'/api/disk/transfer',{method:'POST',token:writer,
     body:{sourceSpace:space,sourcePath:'docs/b.txt',destinationSpace:space,
       destinationPath:'',name:'moved.txt',operation:'move'}});
