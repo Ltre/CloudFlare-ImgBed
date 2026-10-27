@@ -159,3 +159,7 @@ Wrangler's current CLI exposes `--config` as a global option for `pages dev` and
 ### Crash-safe garbage collection (v2.8.3)
 
 A new `gc_claimed_at` lease records the exact time an unreferenced object is claimed for deletion. A storage/network failure **does not** return the source to active, because R2 may have removed its bytes. After 10 minutes the collector can retry idempotently while D1 triggers prevent new file references to the deleting object. Sources belonging to active multipart uploads are excluded. New multipart sessions register their R2 object ID before final completion; abandoning/aborting a session removes the registry row.
+
+### S3 ETag consistency (G1 regression)
+
+The virtual disk gateway exposes **opaque ETags**, not guaranteed MD5 checksums. For S3-created R2 objects, the ETag is based on the immutable backing source UUID and changes on overwrite; copies that share the same source retain the same ETag. Existing ImgBed-backed objects use their virtual node identity as an opaque fallback. PUT, HEAD, GET, ListObjectsV2, CopyObject, and CompleteMultipartUpload agree on the tag; a nonmatching `If-Range` results in an un-ranged 200 response. The local Wrangler HTTP suite and `test/s3-etag.test.js` cover these cases; verification is **pending actual Wrangler execution**, not considered passed merely by committing the tests.
