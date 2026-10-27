@@ -455,3 +455,17 @@ S3 一致性修复和对应测试已分别提交；新增的 HTTP 用例会检�
 **验证边界**：这轮进行了 JavaScript 静态语法检查；尚未取得完整 `npm test` 和真实 Wrangler Pages/Workers 的成功日志。GitHub Actions 当前仍无运行记录，因此不能宣称验收通过。
 
 **当前进度：G1（本地验收，进行中）；G0 已完成。距离首次正式验收还差 G1 的真实测试通过证据及其可能发现的阻塞缺陷修复。现在是否可以验收：否。**
+
+
+问：
+
+之前我说的“保存开发日志到 docs/prompt/dev-20261027.md”写错了，应该是“保存开发日志到 docs/devlog/dev-20261027.md”
+
+现在同时有  docs/prompt/dev-20261027.md 和  docs/devlog/dev-20261027.md
+要合并这两个文件的内容，以 docs/log/dev-20261027.md为准保存
+
+答：
+
+已核对：`docs/prompt/dev-20261027.md` 与 `docs/devlog/dev-20261027.md` 的全文及 Git Blob SHA 相同，无需重复合并。已按你最后指定的 `docs/log/dev-20261027.md` 作为唯一保存位置，保留全部开发记录，修正文内路径约定，并删除原来的两份重复文件。问答日志保留在 `docs/prompt/QA-20261027.log`，在原文后追加本次问答。
+
+进度：G1 本地验收仍在进行；本次仅整理日志，没有改变网盘业务代码。是否可以验收：暂不可以，仍需真实 Wrangler Pages/Workers 测试通过及阻塞缺陷修复。
