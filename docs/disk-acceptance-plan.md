@@ -101,3 +101,11 @@ npm run test:wrangler:local
 - 新增：`npm run doctor:local`（验证原生依赖实际可执行）、`npm run build:local`（Pages build + Workers dry-run）、`npm run verify:local`（从环境检查直到双模式 Wrangler HTTP 的完整 G1 流程）和 `test/local-toolchain.test.js`。
 - 静态检查：Mocha CLI 与 lockfile bin 一致；锁定的原生依赖版本获准；构建命令包含 --dry-run。**未在用户本机执行重新安装、Mocha 或 Wrangler，G1 尚未完成**。
 - Windows 推荐 Node 22 LTS 与 GitHub Actions 基线一致；不要使用 `npm audit fix --force` 强行降级 Miniflare。9 个审计告警保留后续独立治理。
+
+ 
+### 2026-10-27 用户调整 G1 工作优先级（测试环境暂缓）
+
+- 用户明确要求继续开发业务，**以后再解决本地测试问题**；不视为放弃验收标准，G1 仍记为阻塞、未通过，之后需要完整 `npm test`、Pages/Workers 构建、Wrangler 双模式 HTTP 及缺陷复测。
+- 本轮继续修复 R04/R05 协同操作：`disk.html` 依据所选分区实时重算权限，读源+写目标可以跨分区复制，移动仍须双向写授权；目标列表过滤至可写分区。
+- 修复 R05/R12 隐私回显：协作者 `mkdir/import/rename/public` 写接口响应与 `browse` 一致，不泄露底层 ImgBed `source_id`；管理员保持完整响应。
+- 新增六组协作者/管理员写入 API 响应回归，尚未在 Mocha 实跑。已直接执行源码权限/脱敏函数七项小范围检查，不能据此宣布 G1 通过。
