@@ -282,6 +282,14 @@ async function smoke(base,space,writer,reader,otherSpace,otherWriter){
   assert.equal(after.entries.some(e=>e.name==='not-attached.txt'),false,
     'ImgBed public upload must not create unauthorized disk references');
 
+  // FolderSync/Kotlin S3 clients may query the bucket region before syncing.
+  const location=await s3(base,space+'?location');
+  check(location,200,'S3 GetBucketLocation');
+  assert.match(await location.text(),/<LocationConstraint[^>]*>us-east-1<\/LocationConstraint>/);
+  const bucketHead=await s3(base,space,'HEAD');
+  check(bucketHead,200,'S3 HeadBucket');
+  assert.equal(bucketHead.headers.get('x-amz-bucket-region'),'us-east-1');
+
   const list=await s3(base,space+'?list-type=2');
   check(list,200,'S3 ListObjectsV2');
   const listXml=await list.text();
