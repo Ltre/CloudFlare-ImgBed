@@ -211,35 +211,102 @@ $('#attach').onclick=async()=>{const sourceId=prompt('已有 ImgBed 文件 ID（
  const name=prompt('在网盘中的文件名称（可留空）','');if(name===null)return;
  try{await api('import','POST',{space:state.space,path:state.path,sourceId,name});await browse();}catch(e){err(e);}};
 $('#shareFolder').onclick=()=>state.path?share(state.path):status('不能分享网盘根目录；请进入具体文件夹。',true);
+// Reuse ImgBed's existing /upload initialization, chunk and merge protocol.
+// Keep each request bounded so Cloudflare never receives the whole large file.
+const UPLOAD_CHUNK_BYTES=8*1024*1024;
+const CHUNKED_CHANNELS=new Set(['telegram','cfr2','s3','discord']);
+async function uploadRequest(params,form) {
+  const headers={};
+  if(state.key)headers['X-Disk-Token']=state.key;
+  const response=await fetch('/upload?'+qs(params),{
+    method:'POST',body:form,headers,credentials:'same-origin'
+  });
+  if(!response.ok)
+    throw new Error('ImgBed 上传 HTTP '+response.status+': '+(await response.text()).slice(0,240));
+  let result;
+  try{result=await response.json();}catch(_){throw new Error('ImgBed 上传响应不是 JSON');}
+  if(result?.success===false)throw new Error(result.error||'ImgBed 上传失败');
+  return result;
+}
+function uploadForm(file,totalChunks,extra={}) {
+  const form=new FormData();
+  form.append('originalFileName',file.name);
+  form.append('originalFileType',file.type||'application/octet-stream');
+  form.append('totalChunks',String(totalChunks));
+  for(const [key,value] of Object.entries(extra))form.append(key,String(value));
+  return form;
+}
+async function uploadExistingImgBed(file,channel,onProgress) {
+  if(file.size<=UPLOAD_CHUNK_BYTES) {
+    const form=new FormData();form.append('file',file,file.name);
+    const result=await uploadRequest({uploadChannel:channel,returnFormat:'full'},form);
+    onProgress(1,1);
+    return result;
+  }
+  if(!CHUNKED_CHANNELS.has(channel))throw new Error(
+    '该存储渠道尚不支持 ImgBed 分片上传，请使用 Telegram、R2、S3 或 Discord');
+  const total=Math.ceil(file.size/UPLOAD_CHUNK_BYTES);
+  const init=await uploadRequest({initChunked:'true',uploadChannel:channel},
+    uploadForm(file,total));
+  const uploadId=init?.uploadId;
+  if(typeof uploadId!=='string'||!uploadId)throw new Error('ImgBed 没有返回 uploadId');
+  let merged=false;
+  try {
+    for(let index=0;index<total;index++){
+      const offset=index*UPLOAD_CHUNK_BYTES;
+      const chunk=file.slice(offset,Math.min(file.size,offset+UPLOAD_CHUNK_BYTES));
+      const form=uploadForm(file,total,{uploadId,chunkIndex:index});
+      form.append('file',chunk,file.name+'.part'+String(index).padStart(3,'0'));
+      await uploadRequest({chunked:'true',uploadChannel:channel},form);
+      onProgress(index+1,total);
+    }
+    // Merge returns the same [{src: ...}] shape as a normal ImgBed upload.
+    const result=await uploadRequest({chunked:'true',merge:'true',uploadChannel:channel,
+      returnFormat:'full'},uploadForm(file,total,{uploadId}));
+    merged=true;
+    return result;
+  }catch(error){
+    if(!merged){
+      // Cleanup is best-effort; do not replace the actual upload error.
+      try{await uploadRequest({cleanup:'true',uploadId,totalChunks:total},new FormData());}
+      catch(cleanupError){console.warn('ImgBed chunk cleanup failed',cleanupError);}
+    }
+    throw error;
+  }
+}
+function uploadedSourceId(data){
+  const src=Array.isArray(data)?data[0]?.src:data?.src;
+  if(typeof src!=='string')throw new Error('ImgBed 未返回文件 ID');
+  const pathname=new URL(src,location.href).pathname;
+  if(!pathname.startsWith('/file/'))throw new Error('返回的文件路径不符合 ImgBed 格式');
+  return pathname.slice(6).split('/').map(decodeURIComponent).join('/');
+}
 $('#upload').onclick=()=>$('#uploadFiles').click();
 $('#uploadFiles').onchange=async function(){
   const selected=Array.from(this.files||[]);
   this.value='';
-  if(!selected.length || !state.space)return;
-  const space=state.space, folder=state.path, channel=$('#uploadChannel').value;
+  if(!selected.length||!state.space)return;
+  const space=state.space,folder=state.path,channel=$('#uploadChannel').value;
   let uploaded=0;
   for(const file of selected){
+    let sourceId='';
     try{
-      status('上传 '+file.name+' · '+(uploaded+1)+'/'+selected.length);
-      // Reuse ImgBed's existing multipart/form-data upload, do not create a new storage pipeline.
-      const form=new FormData();form.append('file',file,file.name);
-      const params=qs({uploadChannel:channel,returnFormat:'full'});
-      const headers={};
-      if(state.key)headers['X-Disk-Token']=state.key;
-      const response=await fetch('/upload?'+params,{method:'POST',body:form,headers,credentials:'same-origin'});
-      if(!response.ok)throw new Error('上传失败 HTTP '+response.status+': '+(await response.text()).slice(0,180));
-      const uploadedData=await response.json();
-      const src=Array.isArray(uploadedData)?uploadedData[0]?.src:uploadedData?.src;
-      if(typeof src!=='string')throw new Error('ImgBed 未返回文件 ID');
-      const pathname=new URL(src,location.href).pathname;
-      if(!pathname.startsWith('/file/'))throw new Error('返回的文件路径不符合 ImgBed 格式');
-      const sourceId=pathname.slice(6).split('/').map(decodeURIComponent).join('/');
+      const result=await uploadExistingImgBed(file,channel,(done,total)=>{
+        status('上传 '+file.name+' · '+(uploaded+1)+'/'+selected.length+
+          ' · '+Math.round(done/total*100)+'% ('+done+'/'+total+' 块)');
+      });
+      sourceId=uploadedSourceId(result);
       await api('import','POST',{space,path:folder,sourceId,name:file.name});
       uploaded++;
-    }catch(e){err(new Error(file.name+': '+e.message));break;}
+    }catch(e){
+      // An uploaded original must not be deleted if the directory link fails.
+      const extra=sourceId?'；原文件已上传，未关联的 ImgBed ID：'+sourceId:'';
+      err(new Error(file.name+': '+e.message+extra));
+      break;
+    }
   }
   if(uploaded===selected.length)status('成功上传并关联 '+uploaded+' 个文件');
-  try {await browse(folder);}catch(e){err(e);}
+  try{if(state.space===space)await browse(folder);}catch(e){err(e);}
 };
 $('#addSpace').onclick=async()=>{const name=prompt('新分区名称');if(!name)return;try{const data=await api('spaces','POST',{name});state.space=data.space.id;state.path='';await refreshSpaces();}catch(e){err(e);}};
 $('#grant').onclick=async()=>{if(!state.space)return;
