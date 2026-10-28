@@ -204,6 +204,17 @@ export async function transfer(db, sourceSpace, sourcePath, destSpace, destPath,
       'WITH RECURSIVE ancestors(id,parent_id) AS (SELECT id,parent_id FROM disk_nodes WHERE id=? UNION ALL SELECT n.id,n.parent_id FROM disk_nodes n JOIN ancestors a ON a.parent_id=n.id) SELECT id FROM ancestors WHERE id=?',target.id,root.id);
     if (ancestor) throw new DiskError('CANNOT_MOVE_INTO_SELF',409);
   }
+  // Fail oversized cross-partition trees before creating *any* destination
+  // nodes. The prior on-the-fly 2000-node guard could require thousands of
+  // compensating deletes, and a partial rollback could leave ghost folders.
+  if(root.kind==='directory' && (action==='copy' || sourceSpace!==destSpace)){
+    const total=await one(db, `WITH RECURSIVE subtree(id) AS (
+      SELECT id FROM disk_nodes WHERE id=?
+      UNION
+      SELECT child.id FROM disk_nodes child JOIN subtree t ON child.parent_id=t.id
+    ) SELECT COUNT(*) AS count FROM subtree`,root.id);
+    if(Number(total?.count)>2000)throw new DiskError('TREE_TOO_LARGE',413);
+  }
   if (action === 'move' && sourceSpace === destSpace) {
     try {
       await run(db, 'UPDATE disk_nodes SET parent_id=?,name=?,updated_at=? WHERE id=?',

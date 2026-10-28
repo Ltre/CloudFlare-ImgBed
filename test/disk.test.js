@@ -97,4 +97,24 @@ describe('D1 virtual disk, shares and cross-partition operations', () => {
     assert.equal((await resolve(db,a.id,'Media/a.mp3')).is_public,1);
     assert.equal(await deleteTree(db,parent),2);
   });
+  it('rejects cross-partition trees above 2000 nodes before modifying target',async()=>{
+    const root=await mkdir(db,a.id,'','huge');
+    await mkdir(db,b.id,'','target');
+    const insert=db.db.prepare(`INSERT INTO disk_nodes
+      (id,space_id,parent_id,name,kind,source_id,mime,size,is_public,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?)`);
+    const addMany=db.db.transaction(()=>{
+      for(let i=0;i<2000;i++){
+        insert.run('huge-file-'+i,a.id,root.id,'file-'+i,'file','telegram/f'+i,
+          'application/octet-stream',1,0,Date.now(),Date.now());
+      }
+    });
+    addMany();
+    await assert.rejects(transfer(db,a.id,'huge',b.id,'target','copy'),{code:'TREE_TOO_LARGE'});
+    assert.equal((await list(db,b.id,'target')).entries.length,0,
+      'too-large copy should not create any destination nodes');
+    assert.equal((await list(db,a.id,'huge')).entries.length,2000,
+      'failure must preserve the original directory');
+  });
+
 });
