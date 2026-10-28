@@ -10,6 +10,7 @@ import {
     returnWithCheck, return404, returnBlockImg, isDomainAllowed, FILE_CACHE_CONTROL
 } from './fileTools';
 import { getDatabase } from '../utils/databaseAdapter.js';
+import { createTelegramRangeStream } from '../utils/disk/telegramRange.js';
 import { normalizeFileType } from '../utils/mimeTypes.js';
 import { authenticate, AUTH_SCOPE } from '../utils/auth/authCore.js';
 import {
@@ -304,7 +305,7 @@ async function handleTelegramChunkedFile(context, imgRecord, encodedFileName, fi
     headers.set('Content-Length', totalSize.toString());
 
     // 添加ETag支持
-    const etag = `"${metadata.TimeStamp || Date.now()}-${totalSize}"`;
+    const etag = `"${metadata.TimeStamp ?? 0}-${totalSize}"`;
     headers.set('ETag', etag);
 
     // 检查If-None-Match头（304缓存）
@@ -321,7 +322,7 @@ async function handleTelegramChunkedFile(context, imgRecord, encodedFileName, fi
     }
 
     // 检查Range请求头
-    const range = request.headers.get('Range');
+    const range = request.method === 'HEAD' ? null : request.headers.get('Range');
     let rangeStart = 0;
     let rangeEnd = totalSize - 1;
     let isRangeRequest = false;
@@ -349,54 +350,10 @@ async function handleTelegramChunkedFile(context, imgRecord, encodedFileName, fi
     }
 
     try {
-        // 创建支持Range请求的流
-        const stream = new ReadableStream({
-            async start(controller) {
-                try {
-                    let currentPosition = 0;
-
-                    for (let i = 0; i < chunks.length; i++) {
-                        const chunk = chunks[i];
-                        const chunkSize = chunk.size || 0;
-
-                        // 如果当前分片完全在请求范围之前，跳过
-                        if (currentPosition + chunkSize <= rangeStart) {
-                            currentPosition += chunkSize;
-                            continue;
-                        }
-
-                        // 如果当前分片完全在请求范围之后，结束
-                        if (currentPosition > rangeEnd) {
-                            break;
-                        }
-
-                        // 获取分片数据（支持代理域名）
-                        const chunkData = await fetchTelegramChunkWithRetry(TgBotToken, chunk, TgProxyUrl, 3);
-                        if (!chunkData) {
-                            throw new Error(`Failed to fetch chunk ${chunk.index} after retries`);
-                        }
-
-                        // 计算在当前分片中的起始和结束位置
-                        const chunkStart = Math.max(0, rangeStart - currentPosition);
-                        const chunkEnd = Math.min(chunkSize, rangeEnd - currentPosition + 1);
-
-                        // 如果需要部分分片数据
-                        if (chunkStart > 0 || chunkEnd < chunkSize) {
-                            const partialData = chunkData.slice(chunkStart, chunkEnd);
-                            controller.enqueue(partialData);
-                        } else {
-                            controller.enqueue(chunkData);
-                        }
-
-                        currentPosition += chunkSize;
-                    }
-
-                    controller.close();
-                } catch (error) {
-                    controller.error(error);
-                }
-            }
-        });
+        // Lazy, backpressure-aware stream: only read chunks needed by the
+        // consumer and stop pulling after cancellation. Crucial for video seek.
+        const stream=createTelegramRangeStream(chunks,rangeStart,rangeEnd,
+            chunk=>fetchTelegramChunkWithRetry(TgBotToken,chunk,TgProxyUrl,3));
 
         // 设置Range相关头部
         if (isRangeRequest) {
