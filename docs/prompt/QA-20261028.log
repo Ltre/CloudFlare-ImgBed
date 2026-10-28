@@ -67,3 +67,26 @@ Cloudflare **Workers / Pages 两种部署**也已有配置和路由适配，但�
 这次盘点依据的是 [原始需求记录](https://github.com/Ltre/CloudFlare-ImgBed/blob/d2tunnel-disk/docs/prompt/QA-20261027.log)、[当前功能说明](https://github.com/Ltre/CloudFlare-ImgBed/blob/d2tunnel-disk/docs/disk-cloudflare.md) 和分支源代码。没有将“代码已存在”误写为“功能已经验收”。
 
 **当前进度：核心功能第一版已经落地，但仍有上述功能完整性缺口；G1 未通过，G2–G4 未开始。本地测试问题按你的要求暂缓处理。现在是否可以验收：否。**
+
+
+问：
+
+图片、视频、音频、PDF、文本预览；
+大文件分片、Range 预览；
+复用 ImgBed 现有上传系统；
+同时支持 Cloudflare Workers / Pages；
+网盘页面的大文件上传流程——未完整打通；
+S3 协议兼容 明确并修整 S3 常用客户端的兼容缺口 例如 要支持android folder sync软件；
+大目录跨分区复制、移动——有功能，但健壮性仍有限；
+不需要实现全存储渠道的大文件 Range / Seek，只要完美满足telegram就行了；
+
+答：
+
+本轮按明确范围继续开发，不再要求所有存储渠道达到 Telegram 同等级 Range/Seek，也不实现 AWS 全套 S3：
+- 复用原 ImgBed 的 /upload?initChunked=true、?chunked=true、?merge=true 以及失败清理；大于 8MiB 文件按 8MiB 切片，Telegram/R2/S3/Discord 可走既有协议，小文件保留原样，完成后关联 D1 虚拟网盘。Git commit 244b4d9083793368aacfd8e7ee05e79451412b81。
+- Telegram 分片流改为按消费进度 pull，取消后停止读取，定向 Range 不再无条件抓取所有分片；HEAD 不受 Range 影响。独立 Node.js 22 针对性 4 项测试通过，正式测试待执行。Commit 409e58adbb499f3a73841b579124883ac5e5f65f。
+- S3 增加 GetBucketLocation 和 HeadBucket 区域头，Wrangler 烟雾测试加入对应用例。官方 FolderSync S3 Compatible 支持自定义服务地址、path-style、disable payload signing、disable folder objects；建议测试端点 https://YOUR-DOMAIN/s3、bucket 使用分区 UUID、Region us-east-1。真实 Android FolderSync 尚未连通，不能宣称兼容通过。提交 9ce7c31d、50229fa5。
+- 跨分区大目录复制/移动增加递归预检，上限 2000 节点超额时写入前拒绝，避免复制一半才回滚；仍待彻底处理崩溃和并发一致性。提交 5085834d。
+- 增加前端分片协议 Mocha 检查和 Telegram Range Mocha 检查，实际孤立执行前端 5 项模拟与 Telegram Node22 4 项检查，均通过；本地 npm、Wrangler、Cloudflare、FolderSync 真机没有实测通过。
+- 更新 docs/disk-acceptance-plan.md 和 docs/disk-cloudflare.md 的目标范围与 FolderSync 配置，提交 a1e57a64 和 ab eef798（实际提交 abeef798081fe03d6a11aac1a7da078146fedc03）。
+当前进度 G1 未通过，本地环境问题按用户要求暂缓；G2–G4 未开始，暂不可验收。

@@ -139,3 +139,9 @@ npm run test:wrangler:local
 - Path-style access：开启；Disable payload signing：开启（对应当前网关 UNSIGNED-PAYLOAD 大文件流）；Disable folder objects：开启（D1 目录不是物理 S3 零字节占位对象）；Region：`us-east-1`；服务端加密：不要开启不受支持的 SSE 参数。
 - 用**隔离测试分区**开始；首次先单向上传和下载，确认对象 ETag、LastModified、列表、删除正确后再测试双向同步。FolderSync 针对 S3 无法写回远端文件修改时间，若出现反复同步须收集原始客户端日志。
 - 这是一套**预期配置，尚未宣称 Android App 已成功连接**。
+
+
+### 2026-10-28 · 跨区大目录上限写前预检
+
+- `core.transfer` 已采用 WITH RECURSIVE 在跨区操作前计算完整子树规模，超过 2000 节点即返回 TREE_TOO_LARGE，禁止先复制部分节点再尝试清理；新增对应 `test/disk.test.js` 用例。
+- 在独立 SQLite 内存数据库执行同等 SQL，2001 节点的 count 结果正确；**正式 Mocha 和 D1 压测未运行**。仅解决超限早失败，未解决崩溃/并发下的全事务问题。
