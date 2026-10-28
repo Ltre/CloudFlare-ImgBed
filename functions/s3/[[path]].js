@@ -326,7 +326,15 @@ async function handleRequest(context) {
     }
     if (!(await one(db,'SELECT id FROM disk_spaces WHERE id=?',bucket))) return s3Error('NoSuchBucket',404);
     if (!parts.length) {
-      if (method==='HEAD') return new Response(null,{status:200});
+      // S3 SDKs may probe bucket location before selecting their signing
+      // endpoint. Return a standard response instead of a ListObjects body.
+      // SigV4 continues to accept the region supplied by the client.
+      if (method==='HEAD') return new Response(null,{status:200,
+        headers:{'x-amz-bucket-region':'us-east-1'}});
+      if (method==='GET' && url.searchParams.has('location'))
+        return xmlResponse('<?xml version="1.0" encoding="UTF-8"?>'+
+          '<LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'+
+          'us-east-1</LocationConstraint>');
       if (method==='POST' && url.searchParams.has('delete')) {
         const body=await request.text();
         const hash=request.headers.get('x-amz-content-sha256');
