@@ -163,3 +163,31 @@ A new `gc_claimed_at` lease records the exact time an unreferenced object is cla
 ### S3 ETag consistency (G1 regression)
 
 The virtual disk gateway exposes **opaque ETags**, not guaranteed MD5 checksums. For S3-created R2 objects, the ETag is based on the immutable backing source UUID and changes on overwrite; copies that share the same source retain the same ETag. Existing ImgBed-backed objects use their virtual node identity as an opaque fallback. PUT, HEAD, GET, ListObjectsV2, CopyObject, and CompleteMultipartUpload agree on the tag; a nonmatching `If-Range` results in an un-ranged 200 response. The local Wrangler HTTP suite and `test/s3-etag.test.js` cover these cases; verification is **pending actual Wrangler execution**, not considered passed merely by committing the tests.
+
+
+## 2026-10-28 · Telegram Range、ImgBed 原生分片和 FolderSync 目标配置
+
+用户已明确：大文件 Range/Seek **只需要 Telegram 达到完整预览体验**，不要求每个存储渠道功能完全对等；同时必须支持 Android FolderSync 作为第三方 S3 同步客户端。
+
+**网盘页面上传**：`frontend-dist/disk.html` 对不超过 8 MiB 的文件继续使用现有 ImgBed `/upload`；更大的 Telegram/R2/S3/Discord 文件通过 ImgBed 原生 `?initChunked=true` 初始化，8 MiB 切片经 `?chunked=true` 上传，`?chunked=true&merge=true` 合并，最后 `/api/disk/import` 把返回的原文件 ID 关联到虚拟网盘目录。失败时尽力执行 `?cleanup=true`；即使目录关联失败也不会删除已上传的原文件，UI 会告知其 ID。WebDAV/HuggingFace 目前没有这个分片上传协议，超出单次上传阈值会提示换用支持渠道。
+
+**Telegram 预览**：新 `functions/utils/disk/telegramRange.js` 在浏览器消费流时才取所需分片，按 byte range 截取，尊重取消读取；大文件的预览控制不再一次主动取完所有分片。包含四个独立 Node.js 测试：定向 Range、跨片 Range、取消、损坏分片。但真实 Telegram Bot/浏览器视频拖动尚待 G3 验收。
+
+### Android FolderSync · S3 Compatible（计划中的接入配置）
+
+官方说明：https://foldersync.io/docs/help/cloudservices/
+
+| 账号字段 | 本项目建议 |
+| --- | --- |
+| 类型 | S3 Compatible |
+| Server address / 自定义端点 | `https://YOUR-DOMAIN/s3`（路径前缀是网关的一部分） |
+| Access key ID | 配置在 Cloudflare secrets 中的 `DISK_S3_ACCESS_KEY` |
+| Secret access key | 配置在 Cloudflare secrets 中的 `DISK_S3_SECRET_KEY` |
+| 预先存在的 bucket | 网盘分区 UUID；不能用 S3 API 创建 bucket |
+| Region | `us-east-1`（GetBucketLocation 与 HeadBucket 返回该兼容值） |
+| Use path-style access | 开启 |
+| Disable payload signing | 开启，便于大文件流式 PUT |
+| Disable folder objects | 开启，避免发送本项目尚未实现的 S3 零字节文件夹标记 |
+| Server-side encryption / SSE | 关闭（网关未实现完整 SSE 请求支持） |
+
+**限制与验收状态**：这是根据官方 FolderSync 选项给出的预期配置，不是连接成功的证据。已提供 ListObjectsV2、基础对象及 Multipart 和桶区域探测，Android 真机需测试连接、列桶、目录遍历、上传下载、覆盖、删改、增量及双向同步和网络断连重试。尤其应注意其文件时间戳比较策略；S3 通常不能由客户端把上传对象时间戳改为 Android 源文件的时间戳。双向删除测试必须使用空白测试分区，不得使用生产数据。

@@ -109,3 +109,33 @@ npm run test:wrangler:local
 - 本轮继续修复 R04/R05 协同操作：`disk.html` 依据所选分区实时重算权限，读源+写目标可以跨分区复制，移动仍须双向写授权；目标列表过滤至可写分区。
 - 修复 R05/R12 隐私回显：协作者 `mkdir/import/rename/public` 写接口响应与 `browse` 一致，不泄露底层 ImgBed `source_id`；管理员保持完整响应。
 - 新增六组协作者/管理员写入 API 响应回归，尚未在 Mocha 实跑。已直接执行源码权限/脱敏函数七项小范围检查，不能据此宣布 G1 通过。
+
+
+## 2026-10-28 · 用户确认的交付范围修订（覆盖原 R08 全渠道假设）
+
+> 此节是用户后续明确指示，优先级高于上文原始矩阵中可能暗示“所有上传渠道均要同等级 Seek”的描述。保留 G0–G4 五关，不引入无限新增功能。
+
+### 必须完成并验收的功能
+
+1. **图片、视频、音频、PDF、文本预览**：文件预览不仅有 UI 入口，还须在 **Telegram 存储**的普通文件及分片文件上真实可读；视频/音频拖动、HEAD/GET/206/416、If-Range、部分下载和预览票据均有记录。
+2. **大文件分片与 Range**：Telegram 是必须达到可靠 Seek 的目标；**不要求所有存储渠道实现同等 Range/Seek**。R2、Discord 等保留现有能力和已承诺的基础兼容，但不以逐渠道完整 Seek 阻挡本版本。
+3. **复用 ImgBed 原上传**：保留原有上传系统，网盘页面普通文件继续走 `/upload`，大文件调用 ImgBed 既有 `initChunked=true`、`chunked=true`、`merge=true`、失败清理，完成后只关联 D1 虚拟文件，不自建第三套存储方式。需验证 Telegram 大文件实际上传后可拖动预览。
+4. **双云部署**：Cloudflare Workers 与 Pages 需分别通过真实 bundle、绑定、迁移、上传/浏览、分享和 Telegram Range；必须具有运行日志，不得以本地语法解析取代部署验收。
+5. **S3 / Android FolderSync 实际兼容**：FolderSync 的「S3 Compatible」账号连接测试分区，完成列桶/连接、目录浏览、文件上传/下载、覆盖、复制（如客户端有此操作）、删除、增量和双向文件同步、大文件 Multipart、失败及重试；重点核验 SigV4、Path-style、ListObjectsV2 分页、Head/Get/Put/Delete、ETag/LastModified、GetBucketLocation、ListParts/CompleteMultipart。**不扩展为 AWS 全量 S3**。允许客户端设置「禁用目录占位对象」来适配 D1 真实文件夹。
+6. **跨分区/跨协同大目录操作**：复制/移动大量节点时不丢源文件、不破坏原 ImgBed 引用；错误中断、同名冲突、权限被撤销、并发变动下应有明确结果和可恢复状态。既有 2000 节点上限须明确说明，不能默默留下不完整的目标目录。
+
+### 已开发但还未获得真正验收证据
+
+- 网盘页面已接入 ImgBed 原生 8 MiB 分片上传，支持 Telegram/R2/S3/Discord，并对失败会话尽力清理；仍需真实浏览器/Telegram 存储验证。HuggingFace/WebDAV 大文件不在新分片流程之内，页面会给出提示。
+- Telegram 分片 Range 改为背压流式拉取，只获取请求范围内所需分片；取消读取不会继续预取整文件；独立 Node.js 单元小测已通过 4 项，未替代真实视频 Seek。
+- S3 已补 GetBucketLocation / HeadBucket 区域提示；Wrangler HTTP 烟雾测试已增加相应断言，**Android FolderSync 真实连接和双向同步尚未进行**。
+- 本地 Windows 构建/依赖问题按用户指示**暂缓到之后集中修复**，G1 状态保留「阻塞/未通过」，不跳关。
+
+### FolderSync 实际验收建议配置（测试环境）
+
+参考 https://foldersync.io/docs/help/cloudservices/ 的 S3 Compatible 选项：
+
+- 服务类型：S3 Compatible；地址：`https://<你的域名>/s3`；Bucket：已由网盘管理员预先创建的分区 UUID；使用 `DISK_S3_ACCESS_KEY` / `DISK_S3_SECRET_KEY`。
+- Path-style access：开启；Disable payload signing：开启（对应当前网关 UNSIGNED-PAYLOAD 大文件流）；Disable folder objects：开启（D1 目录不是物理 S3 零字节占位对象）；Region：`us-east-1`；服务端加密：不要开启不受支持的 SSE 参数。
+- 用**隔离测试分区**开始；首次先单向上传和下载，确认对象 ETag、LastModified、列表、删除正确后再测试双向同步。FolderSync 针对 S3 无法写回远端文件修改时间，若出现反复同步须收集原始客户端日志。
+- 这是一套**预期配置，尚未宣称 Android App 已成功连接**。
