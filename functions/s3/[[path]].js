@@ -265,13 +265,15 @@ export async function serveObject(context,node) {
     // The original ImgBed reader has its own provider ETag. For the S3
     // gateway our virtual ETag is authoritative. If-Range must be evaluated
     // against that same ETag, including for Telegram and Discord sources.
-    let readContext=context;
-    if(request.headers.has('Range') && request.headers.has('If-Range') &&
-       request.headers.get('If-Range')!==etag){
-      const headers=new Headers(request.headers);
-      headers.delete('Range');headers.delete('If-Range');
-      readContext={...context,request:new Request(request,{headers})};
-    }
+    // A matching *gateway* If-Range must not be sent to the provider: its
+    // independent Telegram/Discord ETag is different. Resolve the condition
+    // here, then send only the effective Range to the original ImgBed reader.
+    const readHeaders=new Headers(request.headers);
+    const ifRange=readHeaders.get('If-Range');
+    if(request.method==='HEAD' || (ifRange && ifRange!==etag))
+      readHeaders.delete('Range');
+    readHeaders.delete('If-Range');
+    const readContext={...context,request:new Request(request,{headers:readHeaders})};
     const response=await readSource(readContext,node.source_id,true);
     const responseHeaders=new Headers(response.headers);
     responseHeaders.set('ETag',etag);
