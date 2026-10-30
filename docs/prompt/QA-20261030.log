@@ -1,0 +1,16 @@
+问：
+
+    继续开发要求的剩余功能
+
+答：
+
+    根据此前明确的需求清单，本轮继续推进原需求内的网盘功能，不处理已经约定暂缓的 Windows 本地 npm 构建/测试环境。重点处理大目录跨分区移动/复制、FolderSync S3 同步兼容、Telegram 大文件 Range/If-Range 和分片完整性。
+
+    1. 跨分区目录移动改为单条递归 INSERT ... SELECT 写入全目录树，并通过 Cloudflare D1 的 batch() 将复制与删除原目录组合成一个事务。此前逐节点复制/失败后尽力回滚的风险得到结构性改进。SQLite Docker D1 模拟器增加事务 batch。仍保留 2000 节点上限，超限写前拒绝；复制生成的虚拟 ID 使用固定 36 字符形态，避免重复复制导致 ID 越来越长。新增失败注入、同名冲突、重复复制回归测试。
+    2. S3 GET/HEAD 增加 Last-Modified，以及 If-None-Match 匹配时 304、If-Match 不匹配时 412。对 Telegram 等外部渠道，S3 网关在判断虚拟 ETag 后去掉原始 If-Range 再向底层读取，解决与原始渠道 ETag 不相同导致的错误全量返回。补充相应单元与 Wrangler HTTP 用例。这是 FolderSync 兼容性的进一步完善，不是 Android FolderSync 真机对接已通过的证据。
+    3. Telegram 分片读取对分片大小不符不再仅记录 warning，改为触发重试；Range 流也会拒绝大小不匹配数据，避免预览内容损坏。增加相关回归测试。
+    4. Wrangler 双模式烟雾测试增加 S3 条件 GET/HEAD、跨分区嵌套目录移动和源目录清理验证，现尚未运行。
+
+    已使用真实 SQLite 执行等效跨区 SQL，验证嵌套目录原子移动、删除故障回滚、目标根目录、目标消失、同名冲突共五种场景，符合预期；代码已做语法检查。由于本地 npm 环境问题暂缓且未获得真实 Cloudflare 绑定，新增项目 Mocha、Wrangler Pages/Workers HTTP、Telegram Bot 视频预览、Android FolderSync 双向同步尚未完成真实验证，不能宣布已经全部解决。
+
+    代码提交到 d2tunnel-disk；验收与部署文档已更新。当前仍 G1 未通过，G2–G4 未开始。用户要求延后处理的 Windows 本地测试问题保留待办；现在不可验收。
