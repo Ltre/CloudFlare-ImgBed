@@ -230,27 +230,34 @@ export async function transfer(db, sourceSpace, sourcePath, destSpace, destPath,
   // copy. Copy the entire subtree with ONE INSERT .. SELECT statement.
   // For moves, batch the INSERT and source DELETE in one atomic transaction.
   //
-  // New IDs are deterministic within this one operation so parent links can
-  // be generated inside SQLite without N per-node DB calls or >100 bindings.
-  const prefix=uuid()+'-';
-  const id=prefix+root.id,now=Date.now();
+  // Keep copied IDs UUID-shaped and fixed length, even when users copy
+  // already-copied directories repeatedly. Per-operation random UUID prefix
+  // plus a deterministic 8-hex-digit ordinal maps parent/child IDs in SQL.
+  const prefix=uuid().slice(0,28);
+  const id=prefix+'00000001',now=Date.now();
   const copySql=`INSERT INTO disk_nodes
     (id,space_id,parent_id,name,kind,source_id,mime,size,is_public,created_at,updated_at)
-    WITH RECURSIVE subtree(id) AS (
-      SELECT id FROM disk_nodes WHERE id=? AND space_id=?
+    WITH RECURSIVE subtree(id,parent_id) AS (
+      SELECT id,parent_id FROM disk_nodes WHERE id=? AND space_id=?
       UNION
-      SELECT n.id FROM disk_nodes n JOIN subtree t ON n.parent_id=t.id WHERE n.space_id=?
+      SELECT n.id,n.parent_id FROM disk_nodes n JOIN subtree t ON n.parent_id=t.id
+        WHERE n.space_id=?
+    ), numbered AS (
+      SELECT id,parent_id,ROW_NUMBER() OVER (
+        ORDER BY CASE WHEN id=? THEN 0 ELSE 1 END,id
+      ) AS ordinal FROM subtree
     )
-    SELECT ? || n.id, ?,
-      CASE WHEN n.id=? THEN ? ELSE ? || n.parent_id END,
-      CASE WHEN n.id=? THEN ? ELSE n.name END,
+    SELECT ? || printf('%08x',c.ordinal), ?,
+      CASE WHEN c.id=? THEN ? ELSE ? || printf('%08x',p.ordinal) END,
+      CASE WHEN c.id=? THEN ? ELSE n.name END,
       n.kind,n.source_id,n.mime,n.size,0,?,?
-    FROM subtree t JOIN disk_nodes n ON n.id=t.id
+    FROM numbered c JOIN disk_nodes n ON n.id=c.id
+    LEFT JOIN numbered p ON p.id=c.parent_id
     WHERE (SELECT COUNT(*) FROM subtree)<=2000
       AND (?='' OR EXISTS (
         SELECT 1 FROM disk_nodes WHERE id=? AND space_id=? AND kind='directory'
       ))`;
-  const copy=db.prepare(copySql).bind(root.id,sourceSpace,sourceSpace,
+  const copy=db.prepare(copySql).bind(root.id,sourceSpace,sourceSpace,root.id,
     prefix,destSpace,root.id,target.id,prefix,root.id,name,now,now,
     target.id,target.id,destSpace);
   try {
