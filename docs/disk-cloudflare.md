@@ -77,7 +77,7 @@ Implemented: ListBuckets, HeadBucket, ListObjects, ListObjectsV2, GetObject, Hea
 
 - Administrator security **must be configured**: virtual disk administration fails closed when no ImgBed administrator credentials are configured. The original ImgBed management policy may remain open until credentials are set.
 - D1 disk schema must be migrated separately for each Cloudflare deployment environment. The virtual disk will report DISK_D1_REQUIRED if D1 is absent.
-- Virtual operations use D1, not distributed object moves. Cross-partition operations copy up to 2,000 virtual nodes and do not provide a single transaction spanning multi-node copy; failures attempt destination rollback without deleting source objects.
+- Virtual operations use D1, not distributed object moves. Cross-partition copies of up to 2,000 virtual nodes now use one recursive SQL INSERT statement; cross-partition moves execute that INSERT and deletion of the source subtree inside a transaction using D1 `batch()`. Both preserve original ImgBed storage bytes. Cross-partition metadata transactions do not make external provider changes transactional. These guarantees still require actual Cloudflare D1 verification.
 - ImgBed source deletion is blocked for referenced originals; management rename/move updates disk source IDs. Underlying storage and metadata changes are not a single distributed transaction, so failed provider operations still require reconciliation.
 - Sharing a file cannot override existing ImgBed block lists or public whitelist restrictions.
 - S3 object upload is limited to R2. It does not replace the ImgBed upload flow.
@@ -191,3 +191,12 @@ The virtual disk gateway exposes **opaque ETags**, not guaranteed MD5 checksums.
 | Server-side encryption / SSE | 关闭（网关未实现完整 SSE 请求支持） |
 
 **限制与验收状态**：这是根据官方 FolderSync 选项给出的预期配置，不是连接成功的证据。已提供 ListObjectsV2、基础对象及 Multipart 和桶区域探测，Android 真机需测试连接、列桶、目录遍历、上传下载、覆盖、删改、增量及双向同步和网络断连重试。尤其应注意其文件时间戳比较策略；S3 通常不能由客户端把上传对象时间戳改为 Android 源文件的时间戳。双向删除测试必须使用空白测试分区，不得使用生产数据。
+
+
+## 2026-10-30 · FolderSync 对象同步 / Telegram 完整性 / 跨分区原子操作
+
+- **FolderSync 元数据**：GET/HEAD 对象返回 `Last-Modified`（取 D1 虚拟节点更新日期）；使用虚拟 S3 ETag 处理 `If-Match` 不匹配时的 412，以及 `If-None-Match` 匹配时的 304，避免不必要的 Telegram/R2 读取。单元测试及 Wrangler 双模式烟雾测试已新增；真实 Android FolderSync 仍待验收。
+- **Telegram 通过 S3 读取**：若外层 S3 的 `If-Range` 匹配网关 ETag，则去掉这个条件再请求原 ImgBed 渠道（其自身的 ETag 不一定相同），仍以 Range 返回 206；旧 ETag 退回完整 200，HEAD 忽略 Range。新增专门的虚拟/原生 ETag 不一致回归。
+- **Telegram 分片完整性**：底层获取分片时，发现与元数据不一致的大小会进入已有重试机制；流式 Range 亦拒绝过长或不足长度的分片，避免输出错误的文件片段。
+- **跨分区事务**：目录树不再逐节点提交。通过递归 CTE + `ROW_NUMBER()` 生成 36 字符 UUID 形态的虚拟节点 ID，单次 `INSERT .. SELECT` 原子复制完整子树（<=2000 节点，均设为私有）；跨区移动在同一 D1 batch 事务内执行复制及删除源引用。源文件实际存储不会在此被移动或删除。Docker SQLite D1 模拟器同步实现事务 batch，避免两种部署语义分叉。
+- **不能宣称全部解决**：真实 Cloudflare D1、并发性能、单个请求超过 2000 节点的目录仍未验证或支持；超限按现有 413 明确拒绝，而不是分批后台执行。跨区域远端数据持久化无需触及 ImgBed 原文件。

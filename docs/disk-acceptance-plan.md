@@ -145,3 +145,15 @@ npm run test:wrangler:local
 
 - `core.transfer` 已采用 WITH RECURSIVE 在跨区操作前计算完整子树规模，超过 2000 节点即返回 TREE_TOO_LARGE，禁止先复制部分节点再尝试清理；新增对应 `test/disk.test.js` 用例。
 - 在独立 SQLite 内存数据库执行同等 SQL，2001 节点的 count 结果正确；**正式 Mocha 和 D1 压测未运行**。仅解决超限早失败，未解决崩溃/并发下的全事务问题。
+
+
+### 2026-10-30 · 原需求缺口继续修补，等待真正验收
+
+| 缺口 | 本轮代码已实现 | 验收边界 |
+| --- | --- | --- |
+| R04 大目录跨区复制/移动崩溃一致性 | 整树递归 SQL 单语句复制 + D1 batch 事务内删除源树；UUID 固定 36 字符，仍有 2000 节点上限 | SQLite 真实 SQL 原型验证 5 个场景通过；新 Mocha 失败注入、目录再复制及双模式 Wrangler 用例尚未实际执行 |
+| R09 Android FolderSync S3 元数据与条件请求 | GET/HEAD 的 Last-Modified、If-None-Match 304、If-Match 412，补充 HTTP 回归 | Android 真机连接、双向同步、冲突处理、断连重试待验收，不能声明 FolderSync 已通过 |
+| R08 Telegram 大文件 Seek 一致性 | 处理 S3 虚拟 ETag 与 Telegram 原生 ETag 差异；损坏/长度异常分片拒绝并重试 | Telegram Bot、视频 seek、各媒体类型与多会话真实测试待完成 |
+| R11 Workers/Pages | 本轮服务端代码保持 Web API + D1 兼容，扩展双模式 Wrangler HTTP 场景 | 两者均未完成真实构建、部署、请求和重启验证 |
+
+用户此前已要求**暂缓 Windows 本地测试安装环境修复**。G1 阻塞仍然有效，不能跳过、也不能将 SQLite 独立验证等同 Cloudflare D1 回归。原始 G2–G4 仍按需求矩阵依次验收。
