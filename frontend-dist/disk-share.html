@@ -1,0 +1,37 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>网盘分享</title>
+<style>body{background:#101624;color:#e8edf9;font:15px/1.6 system-ui;margin:0}main{max-width:880px;margin:40px auto;padding:18px}a{color:#a7c3ff}button{background:#223450;color:#e8edf9;padding:8px;border:1px solid #52627b;border-radius:9px;cursor:pointer;margin:4px}#entries{border-top:1px solid #4a546a;margin-top:16px}article{border-bottom:1px solid #303e57;padding:12px 0}p{color:#a4afc6}</style></head>
+<body><main><h1>◈ 网盘分享</h1><p>此页面仅允许访问分享者选定的文件或文件夹。</p><div id="breadcrumb"></div><section id="entries"></section><p id="status"></p></main>
+<script>
+(()=>{
+const token=new URL(location.href).searchParams.get('token')||'';
+const qs=v=>encodeURIComponent(v);
+const $=s=>document.querySelector(s);
+const make=(tag,text)=>{const e=document.createElement(tag);e.textContent=text;return e;};
+async function browse(path='') {
+ try {
+   const r=await fetch('/api/disk/shared?token='+qs(token)+'&path='+qs(path),{cache:'no-store'});
+   const data=await r.json();if(!r.ok||!data.success)throw new Error(data.error||'分享不可用');
+   const crumbs=$('#breadcrumb');crumbs.replaceChildren();
+   crumbs.append(make('span',data.root.name+' / '));
+   const back=make('button','上一级');back.onclick=()=>browse(path.split('/').slice(0,-1).join('/'));crumbs.append(back);
+   const entries=$('#entries');entries.replaceChildren();
+   function fileLink(label,filePath,mime) {
+     const a=make('a',label);a.href='/api/disk-share/'+qs(token)+(filePath?'/'+filePath.split('/').map(qs).join('/'):'');
+     a.rel='noopener';a.target='_blank';
+     return a;
+   }
+   if(data.node.kind==='file'){entries.append(fileLink(data.node.name,path,data.node.mime));}
+   for(const item of data.entries){
+     const row=make('article','');
+     const p=path?path+'/'+item.name:item.name;
+     if(item.kind==='directory'){
+       const b=make('button','📁 '+item.name);b.onclick=()=>browse(p);row.append(b);
+     }else{row.append(fileLink('📄 '+item.name,p,item.mime));row.append(make('span',' · '+item.size+' bytes'));}
+     entries.append(row);
+   }
+   $('#status').textContent='';
+ }catch(e){$('#status').textContent='无法读取分享：'+e.message;$('#entries').replaceChildren();}
+}
+if(!/^[a-f0-9]{64}$/i.test(token))$('#status').textContent='无效的分享链接';else browse();
+})();
+</script></body></html>

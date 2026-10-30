@@ -1,0 +1,202 @@
+# Virtual Disk — CloudFlare-ImgBed d2tunnel-disk
+
+This feature provides logical multi-level directories, breadcrumbs, partitions, cross-partition/collaborator moves and copies, opt-in public static resources, capability shares, read/write collaborator credentials and a subset of AWS S3-compatible APIs.
+
+**UI:** https://YOUR-DOMAIN/disk.html  
+**Share UI:** https://YOUR-DOMAIN/disk-share.html?token=...  
+
+The original ImgBed uploader is unchanged. Upload an object through ImgBed, then attach its existing file ID to a virtual disk directory. This **does not re-upload** Telegram/Discord chunks or move the physical provider bytes. Virtual copies link to the same original source ID; physical provider changes in the original ImgBed administration UI can invalidate links.
+
+## Cloudflare Pages deployment
+
+1. Bind a Cloudflare D1 database under the **binding name img_d1** (Pages project → Settings → Bindings → D1). This is required by the virtual disk metadata model. Existing ImgBed KV metadata can remain in the existing img_url KV binding; there is no migration of old ImgBed file records.
+2. Apply all four migrations to this binding (once, in order):
+
+    npx wrangler d1 execute YOUR_D1_DATABASE_NAME --remote --file=database/migrations/v2.8.0_disk.sql
+    npx wrangler d1 execute YOUR_D1_DATABASE_NAME --remote --file=database/migrations/v2.8.1_disk_s3_multipart.sql
+    npx wrangler d1 execute YOUR_D1_DATABASE_NAME --remote --file=database/migrations/v2.8.2_disk_gc.sql
+    npx wrangler d1 execute YOUR_D1_DATABASE_NAME --remote --file=database/migrations/v2.8.3_disk_gc_recovery.sql
+
+    For a new ImgBed D1 setup, also initialize the original schema from database/init.sql. Do not drop or reset an existing database.
+3. Optionally bind R2 storage as **img_r2** (needed to use S3 PutObject; R2-backed ImgBed files also use the original img_r2 binding).
+4. Deploy the existing repository with Pages Functions. The functions/ directory is auto-discovered, and frontend-dist/disk.html and frontend-dist/disk-share.html are ordinary Pages static assets.
+
+## Cloudflare Workers deployment
+
+1. Configure the same img_d1 D1 and optional img_r2 R2 bindings in deploy/worker/wrangler.toml, keeping the original Pages-style functions.
+2. Apply the same D1 migration to the bound D1 database.
+3. Use the existing Workers build/deploy command (npm run deploy:worker). Its route generator discovers the new functions/s3, functions/api/disk, functions/disk-static, and functions/api/disk-share entry points. The existing Workers asset binding serves both HTML pages.
+4. Use only encrypted Cloudflare environment secrets for DISK_S3_ACCESS_KEY and DISK_S3_SECRET_KEY if the S3 gateway is enabled.
+
+Both deployment targets reuse standard Web APIs and D1/R2; there are **no Node.js-only runtime dependencies** in the new cloud code. The pre-existing Docker deployment uses its own SQLite/D1 emulator locally; the cloud deployment does not depend on that emulator.
+
+## Browser operations
+
+- New partition: create a dedicated virtual namespace. A folder path is relative to one partition and can be nested arbitrarily (within the current path length limits).
+- Attach an ImgBed file: paste its existing file ID. Its original storage channel and upload are preserved.
+- Rename/move/copy: operate on virtual nodes. Cross-partition moves copy the virtual tree then unlink its old references, preserving the original uploaded bytes.
+- Collaborate: administrator creates a scoped read/write token per partition and shares it through a trusted channel. Enter the token under 协同密钥 in the disk UI. A write grant can modify the destination; moving also requires a write grant to the source. Viewers can obtain short-lived preview links for browser media elements.
+- Share: create a token for one file or folder subtree, optionally with expiry. Revoke it through DELETE /api/disk/shares. Share pages cannot escape the selected subtree.
+- Static resources: enable an individual file's is_public flag; GET/HEAD /disk-static/:space/:path reads it through the original ImgBed reader or the authorized private R2 reader for S3-owned objects. Non-public paths return 404.
+- Preview: image, video, audio, text, PDF via the original ImgBed file reader. Single byte-range requests are supported for original provider paths that offer Range, including the current R2 and chunk reader logic.
+
+## Management API
+
+| Method/path | Description |
+|---|---|
+| GET, POST /api/disk/spaces | List/create partitions |
+| POST /api/disk/space | Rename/delete a partition (administrator) |
+| GET /api/disk/browse?space=ID&path=PATH | List direct children, crumbs |
+| POST /api/disk/mkdir | Create a persistent empty folder |
+| POST /api/disk/import | Associate an existing ImgBed file ID |
+| POST /api/disk/rename | Rename a file or directory |
+| POST /api/disk/transfer | Copy/move a virtual file or directory subtree across partitions |
+| DELETE /api/disk/node?space=ID&path=PATH | Remove a virtual subtree |
+| POST /api/disk/public | Enable/disable individual static file link |
+| GET, POST, DELETE /api/disk/grants | Administrator: issue/list/revoke collaborators |
+| GET, POST, DELETE /api/disk/shares | Issue/list/revoke capability shares |
+| GET /api/disk/shared?token=T&path=PATH | Public capability listing |
+| POST /api/disk/preview | Make a 5-minute read-only media capability |
+| GET /api/disk/source | Source-related file preview links |
+| GET, HEAD /api/disk-share/:token/:subpath | Public share file stream |
+| GET, HEAD /disk-static/:space/:path | Explicitly public static file stream |
+
+A collaborator sends X-Disk-Token: <64-hex token> or Authorization: Bearer <token>. For cross-partition collaboration, X-Disk-Token accepts up to eight comma-separated grant keys in one request; the source and destination grants are validated independently. Tokens are SHA-256 hashes at rest and created with cryptographic randomness. Original blocked/restricted media remain subject to ImgBed's normal security policy even when a virtual share exists.
+
+## S3 gateway
+
+Path-style endpoint: https://YOUR-DOMAIN/s3  
+Bucket name: the virtual partition UUID (ListBuckets lists the UUIDs).  
+Authorization: AWS Signature V4 via Authorization header or X-Amz presigned URL, configured with encrypted DISK_S3_ACCESS_KEY / DISK_S3_SECRET_KEY environment variables.
+
+Implemented: ListBuckets, HeadBucket, ListObjects, ListObjectsV2, GetObject, HeadObject, PutObject (requires R2), DeleteObject and DeleteObjects (virtual unlink), CopyObject (virtual metadata copy), GET byte ranges, ETag for new R2 objects. PUT of large signed-hash payloads requires unsigned-payload streaming mode or the original ImgBed uploader.
+
+**Not implemented (S3 subset, not full S3 parity):** CreateBucket, DeleteBucket, bucket ACL/IAM, versioning, object tagging, complete AWS conditional request matrix, native external-provider PUT. PutObject, CopyObject and multipart completion use copy-on-write replacement of the target virtual object. Previous physical source bytes are conservatively retained to avoid destroying copies in other partitions; automatic deletion on overwrite is intentionally disabled; administrators can explicitly garbage-collect safely unreferenced S3-owned objects after a 24-hour grace period. S3 credentials currently grant access to all disk partitions; they are not individual collaborator permissions.
+
+## Safety and limitations
+
+- Administrator security **must be configured**: virtual disk administration fails closed when no ImgBed administrator credentials are configured. The original ImgBed management policy may remain open until credentials are set.
+- D1 disk schema must be migrated separately for each Cloudflare deployment environment. The virtual disk will report DISK_D1_REQUIRED if D1 is absent.
+- Virtual operations use D1, not distributed object moves. Cross-partition copies of up to 2,000 virtual nodes now use one recursive SQL INSERT statement; cross-partition moves execute that INSERT and deletion of the source subtree inside a transaction using D1 `batch()`. Both preserve original ImgBed storage bytes. Cross-partition metadata transactions do not make external provider changes transactional. These guarantees still require actual Cloudflare D1 verification.
+- ImgBed source deletion is blocked for referenced originals; management rename/move updates disk source IDs. Underlying storage and metadata changes are not a single distributed transaction, so failed provider operations still require reconciliation.
+- Sharing a file cannot override existing ImgBed block lists or public whitelist restrictions.
+- S3 object upload is limited to R2. It does not replace the ImgBed upload flow.
+- New disk UI is a separate page because this branch contains compiled frontend-dist assets, not the editable frontend source tree.
+- Running new code under Workers/Pages has been designed for compatibility, but live Cloudflare deployment, user-account authorization configurations and third-party S3 SDK interoperability require end-to-end testing in an actual environment.
+
+## Local verification
+
+Use Node.js 22 and install dependencies first.
+
+    npm ci
+    npm test
+    npm run test:server
+    npx --no-install wrangler pages functions build functions --outdir data/ci-pages-build
+    node deploy/worker/generate-routes.js
+    npx --no-install wrangler deploy --config deploy/worker/wrangler.toml --dry-run --outdir data/ci-worker-build
+
+The repository's regression workflow now runs for pushes to d2tunnel-disk as well as dev and main.
+
+## S3 multipart and existing uploader integration
+
+The S3 gateway now implements CreateMultipartUpload, UploadPart, ListParts, CompleteMultipartUpload, AbortMultipartUpload and ListMultipartUploads through Cloudflare R2 and D1. Apply all four disk migrations, including v2.8.1 and v2.8.2. Incomplete uploads should be aborted; outstanding R2 upload manifests currently require explicit cleanup.
+
+The disk page's direct upload button reuses ImgBed's existing /upload endpoint, then associates its returned ID with the chosen directory. For the original ImgBed uploader, optionally add diskSpace=PARTITION_UUID, diskPath=folder/subfolder and diskName=filename to the upload/final merge URL. The endUpload hook checks disk write authorization independently and adds the reference asynchronously. This does not grant virtual disk writes to public upload users. Large files should continue using the original ImgBed chunked upload flow.
+
+Original ImgBed file deletion is prevented while a virtual disk still references the file (DISK_SOURCE_IN_USE); original management move and rename operations update virtual references. Database/remote provider failures may require operator reconciliation; do not bypass the original API's permission controls.
+
+## Browser S3 CORS and deployment verification
+
+Cross-origin browser SDK clients must configure the optional `DISK_S3_CORS_ORIGINS` setting as a comma-separated allowlist of exact origins, such as `https://app.example.org`. The S3 gateway allows its own origin by default and handles OPTIONS preflight without requiring a signature; actual S3 API requests still require SigV4 authentication. S3 API responses are private/no-store.
+
+The branch's regression workflow now attempts a Pages Functions build and a **Workers dry-run build** to catch bundle/routing regressions before production deployment. Dry run is not an online deployment. Operators must still verify D1 migrations and configured secrets/bindings in both real Cloudflare environments.
+
+Bulk S3 DeleteObjects (up to 1,000 keys/request) is supported with XML input. Both single and bulk deletion unlink virtual objects, preserving their underlying provider bytes when other references may exist; unreferenced R2 data can be recovered by explicit administrator garbage collection after 24 hours; unrelated ImgBed source objects are never garbage-collected.
+
+## Administrator-controlled S3 storage reclamation
+
+`POST /api/disk/gc` requires administrator authentication. Send `{"confirm":false,"max":25}` to preview candidates; then send `{"confirm":true,"max":25}` to reclaim eligible objects, with a hard limit of 50 per request. Only gateway-created `disk-s3/<uuid>` objects recorded after migration v2.8.2 are candidates, and only after they have been unreferenced for at least 24 hours. D1 rechecks references atomically before marking an object as deleting; triggers reject new references while R2 deletion is in progress. The administrator page includes a 回收空间 action. It does not reclaim any legacy ImgBed uploads or externally managed provider content.
+
+S3-owned R2 objects are marked private in ImgBed metadata: ordinary unauthenticated `/file/<source-id>` requests remain blocked. S3 SigV4 and explicit virtual-disk share/static/preview permissions use the authorized private R2 reader instead. This separation is important when using S3 for private files.
+
+## Real local Wrangler testing (Pages + Workers)
+
+Requires **Node.js 22** and installed dependencies (`npm ci`). Tests use **Wrangler's actual local workerd/Miniflare runtime**, not the Docker substitute or hand-written storage mocks.
+
+```bash
+npm ci
+npm run test:wrangler:local
+# Or run independently:
+npm run test:wrangler:pages
+npm run test:wrangler:workers
+```
+
+The smoke script `scripts/wrangler-disk-smoke.mjs` creates an isolated temporary state directory **for each deployment mode**, invokes real `wrangler d1 execute ... --local` for all four disk migrations, seeds one partition and read/write capability grants, launches `wrangler pages dev` or `wrangler dev`, then makes actual HTTP requests. Checks include S3 AWS SigV4 authentication, R2 upload/download/byte range, copy, KV metadata, D1 directories, scoped collaborator permissions, hiding internal source IDs, opt-in static file access and expiring file sharing. It automatically cleans up temporary local state and doesn't require a Cloudflare login or production resources.
+
+Use `wrangler.disk-local.jsonc` for Pages, `deploy/worker/wrangler.disk-local.jsonc` for Workers; both contain **fixed test-only S3 credentials**. Do not deploy these two configurations or reuse their credentials in production.
+
+To develop interactively with persistent local bindings, initialize the local D1 schema with these commands:
+
+```bash
+npx --no-install wrangler d1 execute img_d1 --local --config wrangler.disk-local.jsonc --persist-to .wrangler/disk-dev-state --file database/migrations/v2.8.0_disk.sql
+npx --no-install wrangler d1 execute img_d1 --local --config wrangler.disk-local.jsonc --persist-to .wrangler/disk-dev-state --file database/migrations/v2.8.1_disk_s3_multipart.sql
+npx --no-install wrangler d1 execute img_d1 --local --config wrangler.disk-local.jsonc --persist-to .wrangler/disk-dev-state --file database/migrations/v2.8.2_disk_gc.sql
+npx --no-install wrangler d1 execute img_d1 --local --config wrangler.disk-local.jsonc --persist-to .wrangler/disk-dev-state --file database/migrations/v2.8.3_disk_gc_recovery.sql
+npm run dev:disk:pages
+# Alternatively use the same migrations with --config deploy/worker/wrangler.disk-local.jsonc
+# and run:
+npm run dev:disk:workers
+```
+
+The local smoke command initializes its own D1 and seeded test access tokens; the manual dev mode starts with no administrator credentials or grants (a deliberately locked-down state). It must be configured before managing a disk.
+
+GitHub Actions additionally runs this HTTP suite after unit tests and Pages/Workers bundle builds. Successful builds are **not** substitutes for a live Cloudflare deployment test; runtime behavior under production bindings and real S3 clients requires separate verification.
+
+### Wrangler Pages local configuration
+
+Wrangler's current CLI exposes `--config` as a global option for `pages dev` and `d1 execute`. The local smoke runner passes the isolated `wrangler.disk-local.jsonc` explicitly; it **does not create or replace** the project's root `wrangler.jsonc` and never requires production credentials. Both Wrangler runtimes and CLI migrations share one temporary persistence directory. `preview_database_id` is bound to `img_d1` for Pages development.
+
+### Crash-safe garbage collection (v2.8.3)
+
+A new `gc_claimed_at` lease records the exact time an unreferenced object is claimed for deletion. A storage/network failure **does not** return the source to active, because R2 may have removed its bytes. After 10 minutes the collector can retry idempotently while D1 triggers prevent new file references to the deleting object. Sources belonging to active multipart uploads are excluded. New multipart sessions register their R2 object ID before final completion; abandoning/aborting a session removes the registry row.
+
+### S3 ETag consistency (G1 regression)
+
+The virtual disk gateway exposes **opaque ETags**, not guaranteed MD5 checksums. For S3-created R2 objects, the ETag is based on the immutable backing source UUID and changes on overwrite; copies that share the same source retain the same ETag. Existing ImgBed-backed objects use their virtual node identity as an opaque fallback. PUT, HEAD, GET, ListObjectsV2, CopyObject, and CompleteMultipartUpload agree on the tag; a nonmatching `If-Range` results in an un-ranged 200 response. The local Wrangler HTTP suite and `test/s3-etag.test.js` cover these cases; verification is **pending actual Wrangler execution**, not considered passed merely by committing the tests.
+
+
+## 2026-10-28 · Telegram Range、ImgBed 原生分片和 FolderSync 目标配置
+
+用户已明确：大文件 Range/Seek **只需要 Telegram 达到完整预览体验**，不要求每个存储渠道功能完全对等；同时必须支持 Android FolderSync 作为第三方 S3 同步客户端。
+
+**网盘页面上传**：`frontend-dist/disk.html` 对不超过 8 MiB 的文件继续使用现有 ImgBed `/upload`；更大的 Telegram/R2/S3/Discord 文件通过 ImgBed 原生 `?initChunked=true` 初始化，8 MiB 切片经 `?chunked=true` 上传，`?chunked=true&merge=true` 合并，最后 `/api/disk/import` 把返回的原文件 ID 关联到虚拟网盘目录。失败时尽力执行 `?cleanup=true`；即使目录关联失败也不会删除已上传的原文件，UI 会告知其 ID。WebDAV/HuggingFace 目前没有这个分片上传协议，超出单次上传阈值会提示换用支持渠道。
+
+**Telegram 预览**：新 `functions/utils/disk/telegramRange.js` 在浏览器消费流时才取所需分片，按 byte range 截取，尊重取消读取；大文件的预览控制不再一次主动取完所有分片。包含四个独立 Node.js 测试：定向 Range、跨片 Range、取消、损坏分片。但真实 Telegram Bot/浏览器视频拖动尚待 G3 验收。
+
+### Android FolderSync · S3 Compatible（计划中的接入配置）
+
+官方说明：https://foldersync.io/docs/help/cloudservices/
+
+| 账号字段 | 本项目建议 |
+| --- | --- |
+| 类型 | S3 Compatible |
+| Server address / 自定义端点 | `https://YOUR-DOMAIN/s3`（路径前缀是网关的一部分） |
+| Access key ID | 配置在 Cloudflare secrets 中的 `DISK_S3_ACCESS_KEY` |
+| Secret access key | 配置在 Cloudflare secrets 中的 `DISK_S3_SECRET_KEY` |
+| 预先存在的 bucket | 网盘分区 UUID；不能用 S3 API 创建 bucket |
+| Region | `us-east-1`（GetBucketLocation 与 HeadBucket 返回该兼容值） |
+| Use path-style access | 开启 |
+| Disable payload signing | 开启，便于大文件流式 PUT |
+| Disable folder objects | 开启，避免发送本项目尚未实现的 S3 零字节文件夹标记 |
+| Server-side encryption / SSE | 关闭（网关未实现完整 SSE 请求支持） |
+
+**限制与验收状态**：这是根据官方 FolderSync 选项给出的预期配置，不是连接成功的证据。已提供 ListObjectsV2、基础对象及 Multipart 和桶区域探测，Android 真机需测试连接、列桶、目录遍历、上传下载、覆盖、删改、增量及双向同步和网络断连重试。尤其应注意其文件时间戳比较策略；S3 通常不能由客户端把上传对象时间戳改为 Android 源文件的时间戳。双向删除测试必须使用空白测试分区，不得使用生产数据。
+
+
+## 2026-10-30 · FolderSync 对象同步 / Telegram 完整性 / 跨分区原子操作
+
+- **FolderSync 元数据**：GET/HEAD 对象返回 `Last-Modified`（取 D1 虚拟节点更新日期）；使用虚拟 S3 ETag 处理 `If-Match` 不匹配时的 412，以及 `If-None-Match` 匹配时的 304，避免不必要的 Telegram/R2 读取。单元测试及 Wrangler 双模式烟雾测试已新增；真实 Android FolderSync 仍待验收。
+- **Telegram 通过 S3 读取**：若外层 S3 的 `If-Range` 匹配网关 ETag，则去掉这个条件再请求原 ImgBed 渠道（其自身的 ETag 不一定相同），仍以 Range 返回 206；旧 ETag 退回完整 200，HEAD 忽略 Range。新增专门的虚拟/原生 ETag 不一致回归。
+- **Telegram 分片完整性**：底层获取分片时，发现与元数据不一致的大小会进入已有重试机制；流式 Range 亦拒绝过长或不足长度的分片，避免输出错误的文件片段。
+- **跨分区事务**：目录树不再逐节点提交。通过递归 CTE + `ROW_NUMBER()` 生成 36 字符 UUID 形态的虚拟节点 ID，单次 `INSERT .. SELECT` 原子复制完整子树（<=2000 节点，均设为私有）；跨区移动在同一 D1 batch 事务内执行复制及删除源引用。源文件实际存储不会在此被移动或删除。Docker SQLite D1 模拟器同步实现事务 batch，避免两种部署语义分叉。
+- **不能宣称全部解决**：真实 Cloudflare D1、并发性能、单个请求超过 2000 节点的目录仍未验证或支持；超限按现有 413 明确拒绝，而不是分批后台执行。跨区域远端数据持久化无需触及 ImgBed 原文件。

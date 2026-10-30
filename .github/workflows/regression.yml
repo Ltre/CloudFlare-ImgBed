@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [dev, main]
   push:
-    branches: [dev, main]
+    branches: [dev, main, d2tunnel-disk]
   workflow_dispatch:
 
 permissions:
@@ -18,7 +18,7 @@ jobs:
   regression:
     name: Regression checks (Node 22)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     env:
       WRANGLER_SEND_METRICS: 'false'
     steps:
@@ -44,3 +44,22 @@ jobs:
 
       - name: Build Pages Functions
         run: npx --no-install wrangler pages functions build functions --outdir data/ci-pages-build
+      - name: Build Workers bundle without deploying
+        run: |
+          node deploy/worker/generate-routes.js
+          npx --no-install wrangler deploy --config deploy/worker/wrangler.toml --dry-run --outdir data/ci-worker-build
+      - name: Run actual Wrangler local HTTP integration tests (Pages and Workers)
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p data/acceptance
+          npm run test:wrangler:local 2>&1 | tee data/acceptance/wrangler-http.log
+
+      - name: Archive local acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: d2tunnel-g1-wrangler-${{ github.run_id }}
+          path: data/acceptance/wrangler-http.log
+          if-no-files-found: warn
+          retention-days: 30

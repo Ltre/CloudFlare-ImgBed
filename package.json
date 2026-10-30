@@ -9,11 +9,19 @@
   "scripts": {
     "ci-test": "concurrently --kill-others \"npm start\" \"wait-on http://localhost:8080 && mocha\"",
     "ci-test:docker": "concurrently --kill-others \"npm run start:docker\" \"wait-on http://localhost:8080 && mocha\"",
-    "test": "mocha",
+    "test": "node --import ./deploy/server/register.mjs ./node_modules/mocha/bin/mocha",
     "test:server": "node --import ./deploy/server/register.mjs test/smoke/serverImports.mjs",
     "start": "npx wrangler pages dev ./frontend-dist --kv \"img_url\" --r2 \"img_r2\" --ip 0.0.0.0 --port 8080 --persist-to ./data",
     "start:docker": "node --import ./deploy/server/register.mjs deploy/server/index.js",
-    "deploy:worker": "node deploy/worker/generate-routes.js && npx wrangler deploy --config deploy/worker/wrangler.toml"
+    "deploy:worker": "node deploy/worker/generate-routes.js && npx wrangler deploy --config deploy/worker/wrangler.toml",
+    "test:wrangler:local": "node scripts/wrangler-disk-smoke.mjs --mode=both",
+    "test:wrangler:pages": "node scripts/wrangler-disk-smoke.mjs --mode=pages",
+    "test:wrangler:workers": "node scripts/wrangler-disk-smoke.mjs --mode=workers",
+    "dev:disk:pages": "wrangler pages dev frontend-dist --config wrangler.disk-local.jsonc --persist-to .wrangler/disk-dev-state",
+    "dev:disk:workers": "node deploy/worker/generate-routes.js && wrangler dev --config deploy/worker/wrangler.disk-local.jsonc --persist-to .wrangler/disk-dev-state",
+    "doctor:local": "node scripts/check-local-toolchain.mjs",
+    "build:local": "npx --no-install wrangler pages functions build functions --outdir data/ci-pages-build && node deploy/worker/generate-routes.js && npx --no-install wrangler deploy --config deploy/worker/wrangler.toml --dry-run --outdir data/ci-worker-build",
+    "verify:local": "npm run doctor:local && npm test && npm run test:server && npm run build:local && npm run test:wrangler:local"
   },
   "overrides": {
     "fast-xml-parser": "^5.3.6"
@@ -24,5 +32,13 @@
     "mocha": "^8.1.3",
     "wait-on": "^7.2.0",
     "wrangler": "^4.24.0"
+  },
+  "allowScripts": {
+    "better-sqlite3@11.10.0": true,
+    "esbuild@0.28.1": true,
+    "esbuild@0.28.2": true,
+    "workerd@1.20260708.1": true,
+    "workerd@1.20260730.1": true,
+    "workerd@1.20261023.1": true
   }
 }

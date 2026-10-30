@@ -41,6 +41,14 @@ The current Mocha entry point automatically loads `.js` test files directly insi
 | Image processing | [imageProcessing.test.js](imageProcessing.test.js) | `functions/file/imageTransform.js` | Parameter validation, processor format support, historical generic types, original-image fallback, input formats and output headers |
 | AI tags | [ai.test.js](ai.test.js) | `api/manage/ai/tags.js` | Original formats, preview-type normalization, signatures and size limits; AI invocation only for valid input |
 | Shared file-type rules | [fileTypes.test.js](fileTypes.test.js) | `utils/mimeTypes.js` | MIME normalization, case-sensitive parameters, explicit-type precedence, extension inference, unknown/ambiguous extensions and random-image keywords versus strict classification |
+| Capability browse privacy | [disk-api-privacy.test.js](disk-api-privacy.test.js) | `functions/api/disk/[[path]].js` | Collaborator source-ID redaction while retaining administrator visibility |
+| S3 storage GC | [disk-gc.test.js](disk-gc.test.js) | `functions/utils/disk/gc.js` and D1 triggers | 24-hour grace, reference safety, dry run, bounded reclamation, concurrent copy guard |
+| S3 bulk delete | [s3-delete.test.js](s3-delete.test.js) | `functions/s3/[[path]].js` | DeleteObjects XML parser, entity decoding and malformed request rejection |
+| S3 private reads | [disk-private-s3.test.js](disk-private-s3.test.js) | `functions/utils/disk/read.js` | Private R2 content, byte ranges and HEAD without exposing public ImgBed source |
+| S3 SigV4 | [s3-auth.test.js](s3-auth.test.js) | `functions/s3/[[path]].js` | Independent HMAC-SHA256 request signer, tampering rejection and CORS origin filtering |
+| S3 multipart | [s3-multipart.test.js](s3-multipart.test.js) | `functions/utils/disk/s3Multipart.js` | XML parsing, D1 durable part manifests, completion and abort via simulated R2 |
+| File byte ranges | [disk-range.test.js](disk-range.test.js) | `functions/file/fileTools.js` and chunk reader | Suffix/open-ended/oversized ranges and invalid bounds |
+| Virtual disk | [disk.test.js](disk.test.js) | `functions/utils/disk/`, `functions/api/disk/`, `functions/s3/` | D1 tree, empty folders, cross-space copy/move, share boundaries, token hashing and public toggles |
 | Server imports | [smoke/serverImports.mjs](smoke/serverImports.mjs) | Main routes above and `functions/dav/` | Unmodified route imports and handler exports through the production loader |
 
 Business paths in the table are relative to `functions/`, except those already starting with `functions/`. Extend the relevant suite when changing one feature. A substantial independent feature can have its own module; add its entry points, scope and boundaries here instead of accumulating unrelated behavior in one file.
@@ -52,6 +60,7 @@ Business paths in the table are relative to `functions/`, except those already s
 - Deletion covers single-file and batch APIs, not recursive folder deletion or every remote channel's failure semantics.
 - Updates cover metadata and individual R2 renames/moves, not recursive directory moves, migrations across all channels or recovery from every intermediate failure.
 - Image processing, AI and random-image tests cover the behavior listed above. Extend their suites when those features change.
+- Disk tests run on an in-memory D1 SQLite emulator and do not check Cloudflare production data, media streaming, concurrent writes, real S3 interoperability or browser UI.
 - Storage requests, cache invalidation and AI calls use doubles. There are no live cloud end-to-end tests, complete Docker image startup checks, browser UI tests or production Cloudflare deployment checks.
 
 Keep gaps explicit here until the corresponding tests exist. Passing CI does not establish that every basic capability has been verified.
@@ -90,3 +99,7 @@ The main repository's `.github/workflows/regression.yml` runs on PRs targeting `
 4. Builds Pages Functions.
 
 The runner reports test counts; this document maintains functional scope rather than a fixed numeric pass criterion. CI supports code review. Changes that need real channel or deployment validation should describe that verification in the PR.
+
+## Wrangler integration smoke
+
+Run `npm run test:wrangler:local` after `npm ci` for real local Pages + Workers HTTP requests backed by Wrangler's D1, KV and R2 emulators. The script uses disposable state and all three migrations. Use `npm run test:wrangler:pages` or `npm run test:wrangler:workers` to isolate a failing mode. See `docs/disk-cloudflare.md` for manual local development and credential boundaries.

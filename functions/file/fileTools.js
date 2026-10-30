@@ -264,3 +264,23 @@ export async function returnWhiteListImg(url) {
         });
     }
 }
+
+/** Parse a single RFC 7233 bytes range: null=none, false=invalid, object=inclusive span. */
+export function parseSingleByteRange(header, totalSize) {
+  if (!header) return null;
+  if (!Number.isSafeInteger(totalSize) || totalSize < 1) return false;
+  const m = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+  if (!m || (!m[1] && !m[2])) return false;
+  let start, end;
+  if (!m[1]) {
+    const suffix = Number(m[2]);
+    if (!Number.isSafeInteger(suffix) || suffix < 1) return false;
+    start = Math.max(0,totalSize-suffix);
+    end = totalSize-1;
+  } else {
+    start=Number(m[1]);end=m[2]?Number(m[2]):totalSize-1;
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start<0 || start>=totalSize || end<start) return false;
+    end=Math.min(end,totalSize-1);
+  }
+  return { start,end };
+}

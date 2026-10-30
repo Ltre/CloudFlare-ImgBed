@@ -6,10 +6,11 @@ import { DiscordAPI } from "../utils/storage/discordAPI";
 import { HuggingFaceAPI } from "../utils/storage/huggingfaceAPI";
 import { buildWebDAVUrl, WebDAVAPI } from "../utils/storage/webdavAPI";
 import {
-    setCommonHeaders, setRangeHeaders, handleHeadRequest, getFileContent, isTgChannel,
+    setCommonHeaders, setRangeHeaders, handleHeadRequest, getFileContent, isTgChannel, parseSingleByteRange,
     returnWithCheck, return404, returnBlockImg, isDomainAllowed, FILE_CACHE_CONTROL
 } from './fileTools';
 import { getDatabase } from '../utils/databaseAdapter.js';
+import { createTelegramRangeStream } from '../utils/disk/telegramRange.js';
 import { normalizeFileType } from '../utils/mimeTypes.js';
 import { authenticate, AUTH_SCOPE } from '../utils/auth/authCore.js';
 import {
@@ -304,7 +305,7 @@ async function handleTelegramChunkedFile(context, imgRecord, encodedFileName, fi
     headers.set('Content-Length', totalSize.toString());
 
     // 添加ETag支持
-    const etag = `"${metadata.TimeStamp || Date.now()}-${totalSize}"`;
+    const etag = `"${metadata.TimeStamp ?? 0}-${totalSize}"`;
     headers.set('ETag', etag);
 
     // 检查If-None-Match头（304缓存）
@@ -321,23 +322,26 @@ async function handleTelegramChunkedFile(context, imgRecord, encodedFileName, fi
     }
 
     // 检查Range请求头
-    const range = request.headers.get('Range');
+    const range = request.method === 'HEAD' ? null : request.headers.get('Range');
     let rangeStart = 0;
     let rangeEnd = totalSize - 1;
     let isRangeRequest = false;
 
-    if (range) {
-        const matches = range.match(/bytes=(\d+)-(\d*)/);
-        if (matches) {
-            rangeStart = parseInt(matches[1]);
-            rangeEnd = matches[2] ? parseInt(matches[2]) : totalSize - 1;
-            isRangeRequest = true;
-
-            // 验证范围有效性
-            if (rangeStart >= totalSize || rangeEnd >= totalSize || rangeStart > rangeEnd) {
-                return new Response('Range Not Satisfiable', { status: 416 });
-            }
+    if (range && (!request.headers.get('If-Range') || request.headers.get('If-Range') === etag)) {
+        const parsed = parseSingleByteRange(range, totalSize);
+        if (!parsed) {
+            return new Response('Range Not Satisfiable', {
+                status: 416,
+                headers: {
+                    'Content-Range': 'bytes */' + totalSize,
+                    'Accept-Ranges': 'bytes',
+                    'Cache-Control': getChunkedFileCacheControl(context)
+                }
+            });
         }
+        rangeStart = parsed.start;
+        rangeEnd = parsed.end;
+        isRangeRequest = true;
     }
 
     // 处理HEAD请求
@@ -346,54 +350,10 @@ async function handleTelegramChunkedFile(context, imgRecord, encodedFileName, fi
     }
 
     try {
-        // 创建支持Range请求的流
-        const stream = new ReadableStream({
-            async start(controller) {
-                try {
-                    let currentPosition = 0;
-
-                    for (let i = 0; i < chunks.length; i++) {
-                        const chunk = chunks[i];
-                        const chunkSize = chunk.size || 0;
-
-                        // 如果当前分片完全在请求范围之前，跳过
-                        if (currentPosition + chunkSize <= rangeStart) {
-                            currentPosition += chunkSize;
-                            continue;
-                        }
-
-                        // 如果当前分片完全在请求范围之后，结束
-                        if (currentPosition > rangeEnd) {
-                            break;
-                        }
-
-                        // 获取分片数据（支持代理域名）
-                        const chunkData = await fetchTelegramChunkWithRetry(TgBotToken, chunk, TgProxyUrl, 3);
-                        if (!chunkData) {
-                            throw new Error(`Failed to fetch chunk ${chunk.index} after retries`);
-                        }
-
-                        // 计算在当前分片中的起始和结束位置
-                        const chunkStart = Math.max(0, rangeStart - currentPosition);
-                        const chunkEnd = Math.min(chunkSize, rangeEnd - currentPosition + 1);
-
-                        // 如果需要部分分片数据
-                        if (chunkStart > 0 || chunkEnd < chunkSize) {
-                            const partialData = chunkData.slice(chunkStart, chunkEnd);
-                            controller.enqueue(partialData);
-                        } else {
-                            controller.enqueue(chunkData);
-                        }
-
-                        currentPosition += chunkSize;
-                    }
-
-                    controller.close();
-                } catch (error) {
-                    controller.error(error);
-                }
-            }
-        });
+        // Lazy, backpressure-aware stream: only read chunks needed by the
+        // consumer and stop pulling after cancellation. Crucial for video seek.
+        const stream=createTelegramRangeStream(chunks,rangeStart,rangeEnd,
+            chunk=>fetchTelegramChunkWithRetry(TgBotToken,chunk,TgProxyUrl,3));
 
         // 设置Range相关头部
         if (isRangeRequest) {
@@ -434,9 +394,8 @@ async function fetchTelegramChunkWithRetry(botToken, chunk, proxyUrl = '', maxRe
             const actualSize = chunkData.byteLength;
 
             // 如果有期望大小且不匹配，抛出错误
-            if (chunk.size && actualSize !== chunk.size) {
-                console.warn(`Chunk ${chunk.index} size mismatch: expected ${chunk.size}, got ${actualSize}`);
-            }
+            if (Number(chunk.size)>0 && actualSize !== Number(chunk.size))
+                throw new Error(`Telegram chunk ${chunk.index} size mismatch: expected ${chunk.size}, got ${actualSize}`);
 
             return new Uint8Array(chunkData);
 
@@ -520,18 +479,21 @@ async function handleDiscordChunkedFile(context, imgRecord, encodedFileName, fil
     let rangeEnd = totalSize - 1;
     let isRangeRequest = false;
 
-    if (range) {
-        const matches = range.match(/bytes=(\d+)-(\d*)/);
-        if (matches) {
-            rangeStart = parseInt(matches[1]);
-            rangeEnd = matches[2] ? parseInt(matches[2]) : totalSize - 1;
-            isRangeRequest = true;
-
-            // 验证范围有效性
-            if (rangeStart >= totalSize || rangeEnd >= totalSize || rangeStart > rangeEnd) {
-                return new Response('Range Not Satisfiable', { status: 416 });
-            }
+    if (range && (!request.headers.get('If-Range') || request.headers.get('If-Range') === etag)) {
+        const parsed = parseSingleByteRange(range, totalSize);
+        if (!parsed) {
+            return new Response('Range Not Satisfiable', {
+                status: 416,
+                headers: {
+                    'Content-Range': 'bytes */' + totalSize,
+                    'Accept-Ranges': 'bytes',
+                    'Cache-Control': getChunkedFileCacheControl(context)
+                }
+            });
         }
+        rangeStart = parsed.start;
+        rangeEnd = parsed.end;
+        isRangeRequest = true;
     }
 
     // 处理HEAD请求
@@ -672,33 +634,38 @@ async function handleR2File(context, fileId, encodedFileName, fileType) {
 
         const R2DataBase = env.img_r2;
 
-        // 检查Range请求头
         const range = request.headers.get('Range');
         let object;
-
-        if (range) {
-            // 处理Range请求
-            const matches = range.match(/bytes=(\d+)-(\d*)/);
-            if (matches) {
-                const start = parseInt(matches[1]);
-                const end = matches[2] ? parseInt(matches[2]) : undefined;
-
-                const rangeOptions = {
-                    range: {
-                        offset: start
-                    }
-                };
-                if (end !== undefined) {
-                    rangeOptions.range.length = end - start + 1;
-                }
-
-                object = await R2DataBase.get(fileId, rangeOptions);
-            } else {
-                object = await R2DataBase.get(fileId);
-            }
-        } else {
-            object = await R2DataBase.get(fileId);
+        // HEAD uses metadata only; never open a multi-GB response stream.
+        if (request.method === 'HEAD' && !range && typeof R2DataBase.head === 'function') {
+            const info=await R2DataBase.head(fileId);
+            if(!info)return new Response('Not Found',{status:404});
+            const headers=new Headers();
+            if(info.writeHttpMetadata)info.writeHttpMetadata(headers);
+            setCommonHeaders(headers,encodedFileName,fileType,getFileCacheControl(context));
+            headers.set('Content-Length',String(info.size));
+            return handleHeadRequest(headers,info.httpEtag||null);
         }
+        const info = range && typeof R2DataBase.head==='function'
+            ? await R2DataBase.head(fileId) : null;
+        if(range && info===null && typeof R2DataBase.head==='function')return new Response('Not Found',{status:404});
+        const ifRange=request.headers.get('If-Range');
+        const effectiveRange=ifRange && info?.httpEtag && ifRange!==info.httpEtag ? null : range;
+        if(effectiveRange && info){
+            const parsed=parseSingleByteRange(effectiveRange,info.size);
+            if(!parsed)return new Response(null,{status:416,headers:{
+              'Content-Range':'bytes */'+info.size,'Accept-Ranges':'bytes'
+            }});
+            object=await R2DataBase.get(fileId,{range:{offset:parsed.start,length:parsed.end-parsed.start+1}});
+        }else if(effectiveRange){
+            const m=/^bytes=(\d+)-(\d*)$/.exec(effectiveRange);
+            if(m){
+                const start=Number(m[1]),end=m[2]?Number(m[2]):undefined;
+                if(!Number.isSafeInteger(start)||end!==undefined&&(!Number.isSafeInteger(end)||end<start))
+                    return new Response(null,{status:416});
+                object=await R2DataBase.get(fileId,{range:{offset:start,...(end!==undefined?{length:end-start+1}:{})}});
+            }else object=await R2DataBase.get(fileId);
+        }else object=await R2DataBase.get(fileId);
 
         if (object === null) {
             return new Response('Error: Failed to fetch file', { status: 500 });
@@ -714,7 +681,7 @@ async function handleR2File(context, fileId, encodedFileName, fileType) {
         }
 
         // 如果是Range请求，设置相应的状态码和头
-        if (range && object.range) {
+        if (effectiveRange && object.range) {
             headers.set('Content-Range', `bytes ${object.range.offset}-${object.range.offset + object.range.length - 1}/${object.size}`);
             headers.set('Content-Length', object.range.length.toString());
 

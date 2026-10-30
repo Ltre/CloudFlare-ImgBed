@@ -3,6 +3,7 @@ import { purgeCFCache, purgeRandomFileListCache, purgePublicFileListCache } from
 import { addFileToIndex } from "../utils/indexManager.js";
 import { getDatabase } from '../utils/databaseAdapter.js';
 import { resolveFileExt } from '../utils/mimeTypes.js';
+import { access, linkFile, requireDiskDb } from '../utils/disk/core.js';
 export { isExtValid, resolveFileExt } from '../utils/mimeTypes.js';
 
 // 统一的响应创建函数
@@ -368,6 +369,21 @@ export async function endUpload(context, fileId, metadata) {
 
     // 更新文件索引（索引更新时会自动计算容量统计）
     await addFileToIndex(context, fileId, metadata);
+
+    // Optional virtual disk attachment; normal ImgBed uploads are unaffected.
+    // 'diskSpace' and 'diskPath' are logical locations, not storage channels.
+    // Authenticate independently so public upload tokens cannot write disk paths.
+    const diskSpace=url.searchParams.get('diskSpace');
+    if (diskSpace) {
+        try {
+            const path=url.searchParams.get('diskPath') || '';
+            const diskName=url.searchParams.get('diskName') || undefined;
+            await access(context,diskSpace,'write');
+            await linkFile(env,requireDiskDb(env),diskSpace,path,fileId,diskName);
+        } catch (error) {
+            console.error('[disk] Upload completed but optional disk attachment failed:',error?.code || error?.message);
+        }
+    }
 }
 
 // 从 request 中解析 ip 地址
