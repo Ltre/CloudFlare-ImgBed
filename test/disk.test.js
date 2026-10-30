@@ -117,4 +117,43 @@ describe('D1 virtual disk, shares and cross-partition operations', () => {
       'failure must preserve the original directory');
   });
 
+  it('rolls back the copied subtree when source deletion fails inside D1 batch',async()=>{
+    await mkdir(db,a.id,'','Important');
+    await mkdir(db,a.id,'Important','Nested');
+    const original=await resolve(db,a.id,'Important');
+    await insertNode(db,{id:uuid(),space_id:a.id,parent_id:original.id,
+      name:'original.mp4',kind:'file',source_id:'telegram/keep-bytes',
+      mime:'video/mp4',size:999,is_public:0,created_at:1,updated_at:1});
+    // Inject a failure after the target INSERT has succeeded.
+    db.exec(`CREATE TRIGGER fail_move_delete BEFORE DELETE ON disk_nodes
+      WHEN OLD.space_id='${a.id}'
+      BEGIN SELECT RAISE(ABORT,'INJECTED_DELETE_FAILURE'); END;`);
+    await assert.rejects(transfer(db,a.id,'Important',b.id,'','move'),
+      /INJECTED_DELETE_FAILURE/);
+    assert.equal((await list(db,b.id,'')).entries.length,0,
+      'D1 batch must rollback all destination writes after DELETE failure');
+    assert.equal((await resolve(db,a.id,'Important/original.mp4')).source_id,
+      'telegram/keep-bytes','original source must stay intact');
+    assert.equal((await resolve(db,a.id,'Important/Nested')).kind,'directory');
+  });
+  it('rejects copy name conflicts without creating a partial target tree',async()=>{
+    await mkdir(db,a.id,'','Project');
+    await mkdir(db,a.id,'Project','Subfolder');
+    await mkdir(db,b.id,'','Mirror');
+    const before=(await list(db,b.id,'')).entries;
+    await assert.rejects(
+      transfer(db,a.id,'Project',b.id,'','copy','Mirror'),
+      {code:'NAME_CONFLICT'});
+    assert.deepEqual((await list(db,b.id,'')).entries,before);
+    assert.equal((await resolve(db,a.id,'Project/Subfolder')).kind,'directory');
+  });
+  it('allows same-partition directory copy using atomic tree insertion',async()=>{
+    await mkdir(db,a.id,'','Source');
+    await mkdir(db,a.id,'Source','Nested');
+    const result=await transfer(db,a.id,'Source',a.id,'','copy','Copy');
+    assert.equal(result.count,2);
+    assert.equal((await resolve(db,a.id,'Copy/Nested')).kind,'directory');
+    assert.equal((await resolve(db,a.id,'Source/Nested')).kind,'directory');
+  });
+
 });
