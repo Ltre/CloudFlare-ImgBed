@@ -156,4 +156,22 @@ describe('D1 virtual disk, shares and cross-partition operations', () => {
     assert.equal((await resolve(db,a.id,'Source/Nested')).kind,'directory');
   });
 
+  it('keeps virtual node IDs bounded to UUID length after repeated directory copies',async()=>{
+    await mkdir(db,a.id,'','Original');
+    await mkdir(db,a.id,'Original','Nested');
+    let source='Original';
+    for(let i=0;i<5;i++){
+      const target='Mirror'+i;
+      await transfer(db,a.id,source,b.id,'','copy',target);
+      const root=await resolve(db,b.id,target);
+      const nested=await resolve(db,b.id,target+'/Nested');
+      assert.match(root.id,/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+      assert.equal(nested.id.length,36);
+      source=target;
+      // Copying from a previous copy should still produce fixed-size IDs.
+      await transfer(db,b.id,source,a.id,'','copy','Intermediate'+i);
+      source='Intermediate'+i;
+    }
+  });
+
 });
