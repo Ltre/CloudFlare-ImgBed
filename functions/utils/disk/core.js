@@ -225,34 +225,67 @@ export async function transfer(db, sourceSpace, sourcePath, destSpace, destPath,
     }
     return { id: root.id, moved: true, count: 1 };
   }
-  const queue = [{ node: root, newParent: target.id, name }];
-  const created = [], visited = new Set();
+  // D1 auto-commits individual statements; the former per-node loop could
+  // expose an incomplete destination or delete the original after a partial
+  // copy. Copy the entire subtree with ONE INSERT .. SELECT statement.
+  // For moves, batch the INSERT and source DELETE in one atomic transaction.
+  //
+  // New IDs are deterministic within this one operation so parent links can
+  // be generated inside SQLite without N per-node DB calls or >100 bindings.
+  const prefix=uuid()+'-';
+  const id=prefix+root.id,now=Date.now();
+  const copySql=`INSERT INTO disk_nodes
+    (id,space_id,parent_id,name,kind,source_id,mime,size,is_public,created_at,updated_at)
+    WITH RECURSIVE subtree(id) AS (
+      SELECT id FROM disk_nodes WHERE id=? AND space_id=?
+      UNION
+      SELECT n.id FROM disk_nodes n JOIN subtree t ON n.parent_id=t.id WHERE n.space_id=?
+    )
+    SELECT ? || n.id, ?,
+      CASE WHEN n.id=? THEN ? ELSE ? || n.parent_id END,
+      CASE WHEN n.id=? THEN ? ELSE n.name END,
+      n.kind,n.source_id,n.mime,n.size,0,?,?
+    FROM subtree t JOIN disk_nodes n ON n.id=t.id
+    WHERE (SELECT COUNT(*) FROM subtree)<=2000
+      AND (?='' OR EXISTS (
+        SELECT 1 FROM disk_nodes WHERE id=? AND space_id=? AND kind='directory'
+      ))`;
+  const copy=db.prepare(copySql).bind(root.id,sourceSpace,sourceSpace,
+    prefix,destSpace,root.id,target.id,prefix,root.id,name,now,now,
+    target.id,target.id,destSpace);
   try {
-    while (queue.length) {
-      if (created.length >= 2000) throw new DiskError('TREE_TOO_LARGE',413);
-      const current = queue.shift(), n = current.node;
-      if (visited.has(n.id)) throw new DiskError('TREE_CYCLE');
-      visited.add(n.id);
-      const id = uuid(), now = Date.now();
-      await insertNode(db, { id, space_id: destSpace, parent_id: current.newParent,
-        name: current.name, kind: n.kind, source_id: n.source_id,
-        mime: n.mime, size: n.size, is_public: 0,
-        created_at: now, updated_at: now });
-      created.push(id);
-      if (n.kind === 'directory') {
-        const children = await all(db, 'SELECT * FROM disk_nodes WHERE space_id=? AND parent_id=? ORDER BY id',sourceSpace,n.id);
-        for (const child of children) queue.push({ node: child, newParent: id, name: child.name });
-      }
+    if(action==='copy'){
+      const result=await copy.run();
+      const count=Number(result.meta?.changes||0);
+      if(!count)throw new DiskError('TRANSFER_CONFLICT',409);
+      return {id,moved:false,count};
     }
-    if (action === 'move') await deleteTree(db, root);
-  } catch (e) {
-    // Never erase source after an incomplete copy.
-    for (const id of created.reverse()) {
-      try { await run(db,'DELETE FROM disk_nodes WHERE id=?',id); } catch (_) {}
-    }
+    // Atomic across both cloud D1 and the local SQLite D1 adapter. Never
+    // fall back to non-transactional writes when batch() is unavailable.
+    if(typeof db.batch!=='function')throw new DiskError('D1_BATCH_REQUIRED',503);
+    const deleteSql=`DELETE FROM disk_nodes WHERE id IN (
+      WITH RECURSIVE subtree(id) AS (
+        SELECT id FROM disk_nodes WHERE id=? AND space_id=?
+        UNION
+        SELECT n.id FROM disk_nodes n JOIN subtree t ON n.parent_id=t.id
+          WHERE n.space_id=?
+      ) SELECT id FROM subtree
+    ) AND EXISTS (
+      SELECT 1 FROM disk_nodes WHERE id=? AND space_id=? AND parent_id=? AND name=?
+    )`;
+    const remove=db.prepare(deleteSql).bind(root.id,sourceSpace,sourceSpace,
+      id,destSpace,target.id,name);
+    const results=await db.batch([copy,remove]);
+    const count=Number(results[0]?.meta?.changes||0);
+    const deleted=Number(results[1]?.meta?.changes||0);
+    if(!count || !deleted || count!==deleted)
+      throw new DiskError('TRANSFER_CONFLICT',409);
+    return {id,moved:true,count};
+  } catch(e) {
+    if(e instanceof DiskError)throw e;
+    if(/unique|constraint/i.test(String(e)))throw new DiskError('NAME_CONFLICT',409);
     throw e;
   }
-  return { id: created[0], moved: action === 'move', count: created.length };
 }
 export async function createGrant(db, spaceId, role, label) {
   if (!['read','write'].includes(role)) throw new DiskError('INVALID_ROLE');

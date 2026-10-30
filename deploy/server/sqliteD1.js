@@ -28,6 +28,25 @@ export class SqliteD1 {
         const db = this.db;
         return new SqliteD1Statement(db, sql);
     }
+
+    /**
+     * Match Cloudflare D1 batch(): statements execute atomically and rollback
+     * together on any SQLite error. Required for crash-safe disk moves.
+     */
+    async batch(statements) {
+        const transaction = this.db.transaction(() => statements.map(statement => {
+            const native = this.db.prepare(statement._sql);
+            if (native.reader) return {
+                success: true, results: native.all(...statement._params), meta: {}
+            };
+            const result = native.run(...statement._params);
+            return {
+                success: true,
+                meta: { changes: result.changes, last_row_id: result.lastInsertRowid }
+            };
+        }));
+        return transaction();
+    }
 }
 
 class SqliteD1Statement {
