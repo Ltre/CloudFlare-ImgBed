@@ -38,4 +38,11 @@ describe('Telegram multipart Range streaming',()=>{
      /Incomplete Telegram chunk/
    );
  });
+ it('rejects oversized Telegram chunks rather than silently truncating data',async()=>{
+   await assert.rejects(
+     new Response(make(0,4,async()=>new Uint8Array(6))).arrayBuffer(),
+     /Incomplete Telegram chunk/
+   );
+ });
+
 });

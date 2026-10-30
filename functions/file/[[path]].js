@@ -394,9 +394,8 @@ async function fetchTelegramChunkWithRetry(botToken, chunk, proxyUrl = '', maxRe
             const actualSize = chunkData.byteLength;
 
             // 如果有期望大小且不匹配，抛出错误
-            if (chunk.size && actualSize !== chunk.size) {
-                console.warn(`Chunk ${chunk.index} size mismatch: expected ${chunk.size}, got ${actualSize}`);
-            }
+            if (Number(chunk.size)>0 && actualSize !== Number(chunk.size))
+                throw new Error(`Telegram chunk ${chunk.index} size mismatch: expected ${chunk.size}, got ${actualSize}`);
 
             return new Uint8Array(chunkData);
 

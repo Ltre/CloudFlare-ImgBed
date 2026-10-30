@@ -18,12 +18,11 @@ export function createTelegramRangeStream(chunks,rangeStart,rangeEnd,loadChunk){
           const data=await loadChunk(chunk);
           if(cancelled)return;
           if(!(data instanceof Uint8Array))throw new Error('Telegram chunk unavailable: '+chunk.index);
+          if(data.length!==size)throw new Error('Incomplete Telegram chunk: '+chunk.index+
+            ', expected '+size+' bytes, received '+data.length);
           const first=Math.max(0,rangeStart-offset);
           const last=Math.min(size,rangeEnd-offset+1);
-          if(first<last){
-            if(last>data.length)throw new Error('Incomplete Telegram chunk: '+chunk.index);
-            controller.enqueue(data.subarray(first,last));
-          }
+          if(first<last)controller.enqueue(data.subarray(first,last));
           if(position>rangeEnd || index===chunks.length)controller.close();
           return;
         }catch(error){
