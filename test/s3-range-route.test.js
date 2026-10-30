@@ -6,7 +6,7 @@ describe('S3 byte-range / If-Range response semantics',()=>{
   const bytes=new TextEncoder().encode('hello world');
   const sourceId='disk-s3/12345678-2222-4444-8888-000000000000';
   const node={id:'virtual-node',source_id:sourceId,name:'video.mp4',
-    mime:'video/mp4',size:bytes.length};
+    mime:'video/mp4',size:bytes.length,updated_at:Date.parse('2026-10-28T15:00:00Z')};
   async function handler(options={}){
     const db=memoryDatabase();
     const backingId=options.channel==='TelegramNew'?'telegram/original-id':sourceId;
@@ -112,4 +112,31 @@ describe('S3 byte-range / If-Range response semantics',()=>{
     assert.equal(head.status,200);
     assert.deepEqual(readerCalls[2],{range:null,ifRange:null});
   });
+  it('provides Last-Modified and conditional S3 GET/HEAD semantics without reading bytes',async()=>{
+    const {route,ctx,operations}=await handler();
+    const etag='"12345678-2222-4444-8888-000000000000"';
+    const notChanged=await route.serveObject(ctx('GET',{'If-None-Match':etag}),node);
+    assert.equal(notChanged.status,304);
+    assert.equal(notChanged.headers.get('ETag'),etag);
+    assert.equal(notChanged.headers.get('Last-Modified'),'Wed, 28 Oct 2026 15:00:00 GMT');
+    const mismatch=await route.serveObject(ctx('HEAD',{'If-Match':'"some-other-object"'}),node);
+    assert.equal(mismatch.status,412);
+    const matching=await route.serveObject(ctx('HEAD',{'If-Match':'"another", '+etag}),node);
+    assert.equal(matching.status,200);
+    assert.deepEqual(operations,[null],
+      '304 and 412 must avoid R2 reads, only the successful HEAD may access R2');
+  });
+  it('applies S3 virtual ETag conditions before calling Telegram reader',async()=>{
+    const {route,ctx,readerCalls,node:legacyNode}=await handler({channel:'TelegramNew'});
+    const notChanged=await route.serveObject(ctx('GET',{
+      'If-None-Match':'"virtual-node"'
+    }),legacyNode);
+    assert.equal(notChanged.status,304);
+    const mismatch=await route.serveObject(ctx('GET',{
+      'If-Match':'"different"'
+    }),legacyNode);
+    assert.equal(mismatch.status,412);
+    assert.deepEqual(readerCalls,[],'conditions must not fetch any Telegram data');
+  });
+
 });
