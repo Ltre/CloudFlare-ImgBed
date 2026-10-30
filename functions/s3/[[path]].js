@@ -259,6 +259,21 @@ export async function serveObject(context,node) {
   const headers=new Headers({'Content-Type':type,'Accept-Ranges':'bytes','Cache-Control':'private, no-store',
     'ETag':etag,
     'Content-Disposition':'inline; filename*=UTF-8\'\''+encodeURIComponent(node.name)});
+  if(Number.isFinite(Number(node.updated_at)) && Number(node.updated_at)>0)
+    headers.set('Last-Modified',new Date(Number(node.updated_at)).toUTCString());
+
+  // Common S3 GET/HEAD conditional requests, used by sync clients to avoid
+  // redundant transfers. Evaluate against the same virtual ETag as List/HEAD.
+  // RFC multi-tag values and '*' are supported (weak tags never match If-Match).
+  const etagMatches=header=>String(header||'').trim()==='*' ||
+    String(header||'').split(',').some(value=>value.trim()===etag);
+  const ifMatch=request.headers.get('If-Match');
+  if(ifMatch && !etagMatches(ifMatch))
+    return new Response(null,{status:412,headers});
+  const ifNoneMatch=request.headers.get('If-None-Match');
+  if(ifNoneMatch && etagMatches(ifNoneMatch))
+    return new Response(null,{status:304,headers});
+
   if (record.metadata?.Channel !== 'CloudflareR2') {
     // Serve bytes with the existing ImgBed reader instead of a redirect;
     // S3 SDKs should receive 200/206/HEAD responses directly.
