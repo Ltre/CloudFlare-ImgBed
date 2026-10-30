@@ -29,11 +29,19 @@ describe('S3 byte-range / If-Range response semantics',()=>{
       getDatabase:()=>db,
       parseSingleByteRange,
       readSource:async ctx=>{
-        readerCalls.push(ctx.request.headers.get('Range'));
-        const hasRange=ctx.request.headers.has('Range');
+        readerCalls.push({
+          range:ctx.request.headers.get('Range'),
+          ifRange:ctx.request.headers.get('If-Range')
+        });
+        // Telegram's own reader has an independent ETag, so a virtual S3
+        // If-Range passed through directly would incorrectly return full 200.
+        const providerEtag='"telegram-native-etag"';
+        const ifRange=ctx.request.headers.get('If-Range');
+        const hasRange=ctx.request.headers.has('Range')&&
+          (!ifRange || ifRange===providerEtag);
         return new Response(hasRange?bytes.slice(0,5):bytes,{
           status:hasRange?206:200,
-          headers:{'Content-Type':'video/mp4'}
+          headers:{'Content-Type':'video/mp4','ETag':providerEtag}
         });
       }
     });
@@ -89,12 +97,19 @@ describe('S3 byte-range / If-Range response semantics',()=>{
     }),legacyNode);
     assert.equal(stale.status,200);
     assert.equal(await stale.text(),'hello world');
-    assert.equal(readerCalls[0],null,'stale If-Range must strip Range before provider read');
+    assert.deepEqual(readerCalls[0],{range:null,ifRange:null},
+      'stale If-Range must not reach provider');
     const correct=await route.serveObject(ctx('GET',{
       Range:'bytes=0-4','If-Range':'"virtual-node"'
     }),legacyNode);
     assert.equal(correct.status,206);
     assert.equal(await correct.text(),'hello');
-    assert.equal(readerCalls[1],'bytes=0-4');
+    assert.deepEqual(readerCalls[1],{range:'bytes=0-4',ifRange:null},
+      'matching virtual ETag must not be passed to Telegram ETag validation');
+    const head=await route.serveObject(ctx('HEAD',{
+      Range:'bytes=0-4','If-Range':'"virtual-node"'
+    }),legacyNode);
+    assert.equal(head.status,200);
+    assert.deepEqual(readerCalls[2],{range:null,ifRange:null});
   });
 });
