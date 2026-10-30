@@ -118,6 +118,15 @@ async function smoke(base,space,writer,reader,otherSpace,otherWriter){
   check(head,200,'S3 HEAD');
   assert.equal(head.headers.get('ETag'),putTag,'HEAD ETag should match');
   assert.equal(Number(head.headers.get('Content-Length')),body.length);
+  assert.ok(Number.isFinite(Date.parse(head.headers.get('Last-Modified'))),
+    'S3 HeadObject must provide a valid Last-Modified for FolderSync');
+  const cached=await s3(base,objectPath,'GET',null,{'If-None-Match':putTag});
+  check(cached,304,'FolderSync S3 conditional GET not modified');
+  assert.equal(await cached.text(),'');
+  const failedPrecondition=await s3(base,objectPath,'HEAD',null,
+    {'If-Match':'"old-object"'});
+  check(failedPrecondition,412,'FolderSync S3 stale If-Match precondition');
+  assert.equal(await failedPrecondition.text(),'');
   const ifRange=await s3(base,objectPath,'GET',null,
     {'Range':'bytes=0-4','If-Range':'"outdated-etag"'});
   check(ifRange,200,'stale If-Range must ignore Range');
@@ -192,6 +201,18 @@ async function smoke(base,space,writer,reader,otherSpace,otherWriter){
   assert.equal(crossCopy.success,true);
   const crossFile=await s3(base,otherSpace+'/cross-copy.txt');
   check(crossFile,200,'cross-partition copy');assert.equal(await crossFile.text(),body.toString());
+  // Source deletion and the full target subtree must commit atomically in D1.
+  await json(base,'/api/disk/transfer',{
+    method:'POST',token:writer+','+otherWriter,
+    body:{sourceSpace:space,sourcePath:'docs/2026',destinationSpace:otherSpace,
+      destinationPath:'',name:'moved-tree',operation:'move'}});
+  const movedTree=await json(base,'/api/disk/browse?space='+otherSpace+'&path=moved-tree',
+    {token:otherWriter});
+  assert.deepEqual(movedTree.entries.map(e=>e.name),['q4']);
+  const sourceAfterMove=await json(base,'/api/disk/browse?space='+space+'&path=docs',
+    {token:reader});
+  assert.ok(!sourceAfterMove.entries.some(e=>e.name==='2026'),
+    'source tree should be removed only after the destination tree is complete');
   await json(base,'/api/disk/transfer',{
     method:'POST',token:reader+','+otherWriter,
     body:{sourceSpace:space,sourcePath:'moved.txt',
